@@ -49,6 +49,8 @@ class RaceMonitor {
     bool roundPointsSignalSeen = false;
     bool prevRaceSignalSeen = false;
 
+    FeedHealthCheck feedHealth;
+
     array<const MLFeed::PlayerCpInfo_V4@> startedPlayers;
     uint[] startedPlayerLoginIds;
     array<const MLFeed::PlayerCpInfo_V4@> finishedPlayers;
@@ -79,6 +81,7 @@ class RaceMonitor {
         if (currState == RaceState::Active) {
             UpdateActive();
         }
+        feedHealth.Update();
         DevWatchScores(this);
     }
 
@@ -487,6 +490,7 @@ class RaceMonitor {
         UI::AlignTextToFramePadding();
         UI::Text("Running Monitor");
         UI::Separator();
+        feedHealth.DrawBanner();
         DrawCurrentState();
         UI::Separator();
         UI::PushStyleColor(UI::Col::Header, vec4(0.260f, 0.590f, 0.980f, 0.304f) * .5);
