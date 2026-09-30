@@ -11,6 +11,7 @@ const string MenuTitle = MenuIconColor + PluginIcon + "\\$z " + PluginName;
 UI::Texture@ logo;
 
 void Main() {
+    // This only runs in developer mode, for sanity checking changes. Does not block CI or release.
     RunDevTests();
     yield();
     @logo = UI::LoadTexture("src/logo.png");
