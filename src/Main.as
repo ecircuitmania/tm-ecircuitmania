@@ -11,6 +11,9 @@ const string MenuTitle = MenuIconColor + PluginIcon + "\\$z " + PluginName;
 UI::Texture@ logo;
 
 void Main() {
+#if DEV
+    RunRoundResultTests();
+#endif
     yield();
     @logo = UI::LoadTexture("src/logo.png");
     Meta::StartWithRunContext(Meta::RunContext::AfterScripts, UpdateEarlyCoro);

@@ -79,6 +79,24 @@ void DevTraceRoundEndPayload(RaceMonitor@ m, Json::Value@ payload) {
 #endif
 }
 
+void DevTraceRankedResults(RaceMonitor@ m, array<RoundResult@>@ results) {
+#if DEV
+    auto j = Json::Object();
+    j["round"] = m.currRound;
+    auto arr = Json::Array();
+    for (uint i = 0; i < results.Length; i++) {
+        auto e = Json::Object();
+        e["position"] = i + 1;
+        e["name"] = results[i].name;
+        e["finishTime"] = results[i].finishTime;
+        e["roundPoints"] = results[i].roundPoints;
+        arr.Add(e);
+    }
+    j["ranked"] = arr;
+    DevTrace("rankedResults", j);
+#endif
+}
+
 #if DEV
 void DevTraceEndRoundDelayed(int64 round) {
     sleep(3000);
