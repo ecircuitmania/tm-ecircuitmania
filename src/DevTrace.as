@@ -11,6 +11,23 @@ void DevTrace(const string&in ev, Json::Value@ data) {
 #endif
 }
 
+#if DEV
+[Setting category="Dev" name="Dry run (never send HTTP requests)"]
+bool S_DevDryRun = true;
+#endif
+
+// True when the request should be skipped instead of sent to ECM.
+bool DevDryRun(const string&in url, const string&in payload) {
+#if DEV
+    if (S_DevDryRun) {
+        print("DRY RUN, not sent: " + url);
+        print("Payload: " + payload);
+        return true;
+    }
+#endif
+    return false;
+}
+
 void DevTraceState(RaceMonitor@ m, RaceState old, RaceState new) {
 #if DEV
     auto j = DevRaceJson();
