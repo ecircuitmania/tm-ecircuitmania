@@ -61,6 +61,7 @@ class RaceMonitor {
         if (currState == RaceState::Active) {
             UpdateActive();
         }
+        DevWatchScores(this);
     }
 
     void OnNewMap() {
