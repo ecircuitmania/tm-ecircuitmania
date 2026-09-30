@@ -147,13 +147,17 @@ class RaceMonitor {
         }
         finishedPlayers.InsertLast(player);
         finishedPlayerLoginIds.InsertLast(player.LoginMwId.Value);
-        startnew(CoroutineFuncUserdata(SendPlayerFinish), player);
+        // The per-player message is not sent here. A finish seen mid-round can be
+        // provisional (the local player's own time, before the server confirms it),
+        // so per-player messages are sent at round end from the same results as the
+        // round-end message. See SendOnRoundEnd.
     }
 
     void SendPlayerFinish(ref@ pref) {
-        MLFeed::PlayerCpInfo_V4@ player = cast<MLFeed::PlayerCpInfo_V4>(pref);
+        RoundResult@ result = cast<RoundResult>(pref);
+        DevTracePlayerFinishSend(this, result);
         PlayerFinishMsgs_Sent++;
-        ECMResponse@ r = AddOnPlayerFinishReq(apiKey, matchId, Json::Write(MakePlayerFinishPayload(player.WebServicesUserId, player.IsFinished ? player.LastCpTime : -1, currRound, mapUid)));
+        ECMResponse@ r = AddOnPlayerFinishReq(apiKey, matchId, Json::Write(MakePlayerFinishPayload(result.wsid, result.finishTime, currRound, mapUid)));
         if (r.success) {
             PlayerFinishMsgs_Succeeded++;
             lastSuccessMsg = r.message;
@@ -222,8 +226,20 @@ class RaceMonitor {
     string lastError = "";
 
     void SendOnRoundEnd() {
+        // Build the round's results once, then send every message from them,
+        // so per-player and round-end messages always agree.
+        auto results = BuildRoundResults();
+
+        // Per-player messages for confirmed finishers, started first so they
+        // go out ahead of the round-end message as before.
+        for (uint i = 0; i < results.Length; i++) {
+            if (!results[i].Finished) continue;
+            startnew(CoroutineFuncUserdata(SendPlayerFinish), results[i]);
+        }
+        yield();
+
         RoundEndMsgs_Sent++;
-        auto payload = GetRoundEndPayload();
+        auto payload = MakeRoundEndPayloadFromResults(results);
         DevTraceRoundEndPayload(this, payload);
         ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(payload));
         if (r.success) {
@@ -235,7 +251,8 @@ class RaceMonitor {
         }
     }
 
-    Json::Value@ GetRoundEndPayload() {
+    // Everyone who took part in the round, with final times read now, ranked.
+    array<RoundResult@>@ BuildRoundResults() {
         auto rd = MLFeed::GetRaceData_V4();
         array<RoundResult@> results;
         for (uint i = 0; i < finishedPlayers.Length; i++) {
@@ -260,7 +277,10 @@ class RaceMonitor {
 
         // Rank by race time with Nadeo's tiebreak, not by detection order.
         SortRoundResults(results);
+        return results;
+    }
 
+    Json::Value@ MakeRoundEndPayloadFromResults(array<RoundResult@>@ results) {
         PlayerFinishData@[] players;
         for (uint i = 0; i < results.Length; i++) {
             players.InsertLast(PlayerFinishData(results[i].wsid, results[i].finishTime, i + 1));

@@ -79,6 +79,17 @@ void DevTraceRoundEndPayload(RaceMonitor@ m, Json::Value@ payload) {
 #endif
 }
 
+void DevTracePlayerFinishSend(RaceMonitor@ m, RoundResult@ result) {
+#if DEV
+    auto j = Json::Object();
+    j["round"] = m.currRound;
+    j["name"] = result.name;
+    j["finishTime"] = result.finishTime;
+    j["roundPoints"] = result.roundPoints;
+    DevTrace("playerFinishSend", j);
+#endif
+}
+
 void DevTraceRankedResults(RaceMonitor@ m, array<RoundResult@>@ results) {
 #if DEV
     auto j = Json::Object();
