@@ -237,18 +237,16 @@ class RaceMonitor {
 
     Json::Value@ GetRoundEndPayload() {
         auto rd = MLFeed::GetRaceData_V4();
-        PlayerFinishData@[] players;
+        array<RoundResult@> results;
         for (uint i = 0; i < finishedPlayers.Length; i++) {
-            auto player = finishedPlayers[i];
-            players.InsertLast(PlayerFinishData(player.WebServicesUserId, player.IsFinished ? player.LastCpTime : -1, i + 1));
+            results.InsertLast(RoundResultFromPlayer(finishedPlayers[i]));
         }
-        auto nbFinished = players.Length;
         for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
             auto player = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
             if (player.RequestsSpectate) continue;
             if (player.CpCount == 0) continue;
             if (finishedPlayerLoginIds.Find(player.LoginMwId.Value) >= 0) continue;
-            players.InsertLast(PlayerFinishData(player.WebServicesUserId, player.IsFinished ? player.LastCpTime : -1, ++nbFinished));
+            results.InsertLast(RoundResultFromPlayer(player));
             finishedPlayerLoginIds.InsertLast(player.LoginMwId.Value);
         }
         for (uint i = 0; i < startedPlayers.Length; i++) {
@@ -256,9 +254,18 @@ class RaceMonitor {
             if (player.RequestsSpectate) continue;
             if (player.CpCount == 0) continue;
             if (finishedPlayerLoginIds.Find(player.LoginMwId.Value) >= 0) continue;
-            players.InsertLast(PlayerFinishData(player.WebServicesUserId, -1, ++nbFinished));
+            results.InsertLast(RoundResultFromPlayer(player, true));
             finishedPlayerLoginIds.InsertLast(player.LoginMwId.Value);
         }
+
+        // Rank by race time with Nadeo's tiebreak, not by detection order.
+        SortRoundResults(results);
+
+        PlayerFinishData@[] players;
+        for (uint i = 0; i < results.Length; i++) {
+            players.InsertLast(PlayerFinishData(results[i].wsid, results[i].finishTime, i + 1));
+        }
+        DevTraceRankedResults(this, results);
         return MakeRoundEndPayload(players, currRound, mapUid);
     }
 
