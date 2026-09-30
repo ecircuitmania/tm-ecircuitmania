@@ -83,6 +83,13 @@ class RaceMonitor {
 
 
     void UpdateState(RaceState old, RaceState new) {
+#if DEV
+        auto tj = DevRaceJson();
+        tj["from"] = tostring(old);
+        tj["to"] = tostring(new);
+        tj["round"] = currRound;
+        DevTrace("state", tj);
+#endif
         currState = new;
         switch (new) {
             case RaceState::NoMap: return;
@@ -129,7 +136,23 @@ class RaceMonitor {
         }
     }
 
+#if DEV
+    dictionary devDetectLogged;
+#endif
     void AddPlayerFinish(const MLFeed::PlayerCpInfo_V4@ player) {
+#if DEV
+        string devKey = player.Login + "/" + currRound + "/" + player.StartTime;
+        bool devLog = !devDetectLogged.Exists(devKey);
+        devDetectLogged[devKey] = true;
+        Json::Value@ dj = Json::Object();
+        if (devLog) @dj = DevPlayerJson(player);
+        dj["round"] = currRound;
+        dj["activeStartTime"] = activeStartTime;
+        dj["alreadyFinished"] = HasPlayerFinished(player.LoginMwId.Value);
+        dj["accepted"] = !HasPlayerFinished(player.LoginMwId.Value) && player.StartTime >= activeStartTime && currRound != 0;
+        dj["detectIndex"] = finishedPlayers.Length;
+        if (devLog) DevTrace("detect", dj);
+#endif
         if (HasPlayerFinished(player.LoginMwId.Value)) {
             Dev_Notify("Player already finished: " + player.Login);
             return;
@@ -192,6 +215,14 @@ class RaceMonitor {
     }
 
     void OnEndRound(RaceState prior) {
+#if DEV
+        auto ej = Json::Object();
+        ej["round"] = currRound;
+        ej["prior"] = tostring(prior);
+        ej["players"] = DevAllPlayersJson();
+        DevTrace("endRoundSnapshot", ej);
+        startnew(CoroutineFunc(DevDelayedEndRoundSnapshot));
+#endif
         if (prior == RaceState::Active) {
             startnew(CoroutineFunc(SendOnRoundEnd));
         } else {
@@ -199,6 +230,17 @@ class RaceMonitor {
         startnew(CoroutineFunc(ClearFinishedPlayers_Delayed));
         Dev_Notify("OnEndRound, prior: " + tostring(prior));
     }
+
+#if DEV
+    void DevDelayedEndRoundSnapshot() {
+        auto round = currRound;
+        sleep(3000);
+        auto ej = Json::Object();
+        ej["round"] = round;
+        ej["players"] = DevAllPlayersJson();
+        DevTrace("endRoundSnapshot3s", ej);
+    }
+#endif
 
     void OnPodium(RaceState prior) {
         Dev_Notify("OnPodium, prior: " + tostring(prior));
@@ -220,7 +262,14 @@ class RaceMonitor {
 
     void SendOnRoundEnd() {
         RoundEndMsgs_Sent++;
-        ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(GetRoundEndPayload()));
+        auto payload = GetRoundEndPayload();
+#if DEV
+        auto pj = Json::Object();
+        pj["round"] = currRound;
+        pj["payload"] = payload;
+        DevTrace("roundEndPayload", pj);
+#endif
+        ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(payload));
         if (r.success) {
             RoundEndMsgs_Succeeded++;
             lastSuccessMsg = r.message;

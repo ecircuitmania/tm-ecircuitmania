@@ -45,7 +45,19 @@ ECMResponse@ AddOnEndRoundReq(const string &in apiKey, const string &in matchId,
 }
 
 
+#if DEV
+[Setting category="Dev" name="Dry run (never send HTTP requests)"]
+bool S_DevDryRun = true;
+#endif
+
 ECMResponse@ MakeRequestEcircuit(const string &in apiKey, const string &in url, const string &in payload) {
+#if DEV
+    if (S_DevDryRun) {
+        print("DRY RUN, not sent: " + url);
+        print("Payload: " + payload);
+        return ECMResponse(true, 0, "dry run");
+    }
+#endif
     Net::HttpRequest@ req = Net::HttpRequest();
     req.Method = Net::HttpMethod::Post;
     req.Url = url;
