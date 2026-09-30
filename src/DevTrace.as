@@ -1,8 +1,8 @@
-// Dev-only tracing for reproducing round-end issues.
+// Dev-only tracing.
 // Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
-// No behaviour change: in release builds these functions do nothing.
+// Omitted from release builds.
 
-void DevTrace(const string &in ev, Json::Value@ data) {
+void DevTrace(const string&in ev, Json::Value@ data) {
 #if DEV
     data["ev"] = ev;
     data["now"] = Time::Now;
@@ -11,7 +11,66 @@ void DevTrace(const string &in ev, Json::Value@ data) {
 #endif
 }
 
+void DevTraceState(RaceMonitor@ m, RaceState old, RaceState new) {
 #if DEV
+    auto j = DevRaceJson();
+    j["from"] = tostring(old);
+    j["to"] = tostring(new);
+    j["round"] = m.currRound;
+    DevTrace("state", j);
+#endif
+}
+
+#if DEV
+dictionary devDetectLogged;
+#endif
+
+// Rejected finishes are re-detected every frame, so each is logged only once.
+void DevTraceDetect(RaceMonitor@ m, const MLFeed::PlayerCpInfo_V4@ player) {
+#if DEV
+    string key = player.Login + "/" + m.currRound + "/" + player.StartTime;
+    if (devDetectLogged.Exists(key)) return;
+    devDetectLogged[key] = true;
+    bool alreadyFinished = m.HasPlayerFinished(player.LoginMwId.Value);
+    auto j = DevPlayerJson(player);
+    j["round"] = m.currRound;
+    j["activeStartTime"] = m.activeStartTime;
+    j["alreadyFinished"] = alreadyFinished;
+    j["accepted"] = !alreadyFinished && player.StartTime >= m.activeStartTime && m.currRound != 0;
+    j["detectIndex"] = m.finishedPlayers.Length;
+    DevTrace("detect", j);
+#endif
+}
+
+void DevTraceEndRound(RaceMonitor@ m, RaceState prior) {
+#if DEV
+    auto j = Json::Object();
+    j["round"] = m.currRound;
+    j["prior"] = tostring(prior);
+    j["players"] = DevAllPlayersJson();
+    DevTrace("endRoundSnapshot", j);
+    startnew(DevTraceEndRoundDelayed, m.currRound);
+#endif
+}
+
+void DevTraceRoundEndPayload(RaceMonitor@ m, Json::Value@ payload) {
+#if DEV
+    auto j = Json::Object();
+    j["round"] = m.currRound;
+    j["payload"] = payload;
+    DevTrace("roundEndPayload", j);
+#endif
+}
+
+#if DEV
+void DevTraceEndRoundDelayed(int64 round) {
+    sleep(3000);
+    auto j = Json::Object();
+    j["round"] = int(round);
+    j["players"] = DevAllPlayersJson();
+    DevTrace("endRoundSnapshot3s", j);
+}
+
 Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ p) {
     auto j = Json::Object();
     j["login"] = p.Login;
