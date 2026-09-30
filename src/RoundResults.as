@@ -8,6 +8,8 @@ class RoundResult {
     int points = 0;
     // Server-assigned round points, kept for dev cross-checks only.
     int roundPoints = 0;
+    // Round number the result belongs to, set when the round's messages are sent.
+    int round = 0;
 
     RoundResult() {}
 

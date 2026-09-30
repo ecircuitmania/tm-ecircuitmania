@@ -221,3 +221,19 @@ void DevWatchScores(RaceMonitor@ m) {
     }
 #endif
 }
+
+void DevTraceLocalGate(RaceMonitor@ m, const string &in outcome, const MLFeed::PlayerCpInfo_V4@ localPlayer, bool confirmed, uint waitedMs) {
+#if DEV
+    auto j = Json::Object();
+    j["round"] = m.currRound;
+    j["outcome"] = outcome;
+    j["confirmed"] = confirmed;
+    j["waitedMs"] = waitedMs;
+    j["unfinishedRp"] = m.localUnfinishedRoundPoints;
+    j["provisionalTime"] = m.localProvisionalTime;
+    j["rpSignal"] = m.roundPointsSignalSeen;
+    j["prevRaceSignal"] = m.prevRaceSignalSeen;
+    j["local"] = DevPlayerJson(localPlayer);
+    DevTrace("localGate", j);
+#endif
+}
