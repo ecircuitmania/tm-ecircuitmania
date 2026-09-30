@@ -84,7 +84,7 @@ class RaceMonitor {
 
     void UpdateState(RaceState old, RaceState new) {
         DevTraceState(this, old, new);
-        currState = new;// No behaviour change: in release builds these functions do nothing.
+        currState = new;
         switch (new) {
             case RaceState::NoMap: return;
             case RaceState::NoRound_or_Warmup: {
@@ -236,8 +236,6 @@ class RaceMonitor {
     }
 
     Json::Value@ GetRoundEndPayload() {
-        // Collect everyone who took part in the round (same inclusion rules as before),
-        // reading each player's final times now rather than when they were noticed.
         auto rd = MLFeed::GetRaceData_V4();
         array<RoundResult@> results;
         for (uint i = 0; i < finishedPlayers.Length; i++) {
