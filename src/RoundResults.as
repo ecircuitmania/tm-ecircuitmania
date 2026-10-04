@@ -1,5 +1,5 @@
 class RoundResult {
-    string wsid;
+    string webServicesUserId;
     string name;
     // Final race time in ms, or -1 if the player did not finish.
     int finishTime = -1;
@@ -11,8 +11,8 @@ class RoundResult {
 
     RoundResult() {}
 
-    RoundResult(const string &in wsid, const string &in name, int finishTime, const int[] &in cpTimes, int points) {
-        this.wsid = wsid;
+    RoundResult(const string &in webServicesUserId, const string &in name, int finishTime, const int[] &in cpTimes, int points) {
+        this.webServicesUserId = webServicesUserId;
         this.name = name;
         this.finishTime = finishTime;
         this.cpTimes = cpTimes;
@@ -33,14 +33,14 @@ class RoundResult {
 // Build a RoundResult from MLFeed's current view of a player.
 // Call at round end: by then MLFeed holds the server-corrected times.
 RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
-    int[] cps;
+    int[] cpTimes;
     auto raw = player.CpTimes;
     // MLFeed's CpTimes has a leading 0 for the start.
-    for (uint i = 1; i < raw.Length; i++) cps.InsertLast(raw[i]);
+    for (uint i = 1; i < raw.Length; i++) cpTimes.InsertLast(raw[i]);
     int finishTime = player.IsFinished ? player.LastCpTime : -1;
-    RoundResult@ rr = RoundResult(player.WebServicesUserId, player.Name, finishTime, cps, player.Points);
-    rr.roundPoints = player.RoundPoints;
-    return rr;
+    RoundResult@ result = RoundResult(player.WebServicesUserId, player.Name, finishTime, cpTimes, player.Points);
+    result.roundPoints = player.RoundPoints;
+    return result;
 }
 
 // true if a should be ranked ahead of b
@@ -51,12 +51,12 @@ bool RoundResultLess(const RoundResult@ a, const RoundResult@ b) {
         if (a.finishTime != b.finishTime) return a.finishTime < b.finishTime;
         // Tiebreak on previous checkpoint times, latest checkpoint first.
         // The last entry is the finish itself, so start one before it.
-        int ia = int(a.cpTimes.Length) - 2;
-        int ib = int(b.cpTimes.Length) - 2;
-        while (ia >= 0 && ib >= 0) {
-            if (a.cpTimes[ia] != b.cpTimes[ib]) return a.cpTimes[ia] < b.cpTimes[ib];
-            ia--;
-            ib--;
+        int indexA = int(a.cpTimes.Length) - 2;
+        int indexB = int(b.cpTimes.Length) - 2;
+        while (indexA >= 0 && indexB >= 0) {
+            if (a.cpTimes[indexA] != b.cpTimes[indexB]) return a.cpTimes[indexA] < b.cpTimes[indexB];
+            indexA--;
+            indexB--;
         }
     } else {
         // No finish: more checkpoints is better, then earlier time at the last one.

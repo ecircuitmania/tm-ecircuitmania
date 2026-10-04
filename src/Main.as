@@ -11,8 +11,10 @@ const string MenuTitle = MenuIconColor + PluginIcon + "\\$z " + PluginName;
 UI::Texture@ logo;
 
 void Main() {
+#if DEV
     // This only runs in developer mode, for sanity checking changes. Does not block CI or release.
-    RunDevTests();
+    RunRoundResultTests();
+#endif
     yield();
     @logo = UI::LoadTexture("src/logo.png");
     Meta::StartWithRunContext(Meta::RunContext::AfterScripts, UpdateEarlyCoro);

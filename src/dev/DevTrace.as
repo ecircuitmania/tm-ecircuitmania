@@ -1,7 +1,7 @@
 // Dev-only tracing.
 // Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
 //
-// Never shipped: the release workflow leaves this file out of the package, so
+// Never shipped: the release workflow leaves src/dev/ out of the package, so
 // call anything declared here only from inside an #if DEV block.
 #if DEV
 
@@ -69,16 +69,16 @@ void DevTraceRoundEndPayload(RaceMonitor@ m, Json::Value@ payload) {
 void DevTraceRankedResults(RaceMonitor@ m, array<RoundResult@>@ results) {
     auto j = Json::Object();
     j["round"] = m.currRound;
-    auto arr = Json::Array();
+    auto ranked = Json::Array();
     for (uint i = 0; i < results.Length; i++) {
-        auto e = Json::Object();
-        e["position"] = i + 1;
-        e["name"] = results[i].name;
-        e["finishTime"] = results[i].finishTime;
-        e["roundPoints"] = results[i].roundPoints;
-        arr.Add(e);
+        auto entry = Json::Object();
+        entry["position"] = i + 1;
+        entry["name"] = results[i].name;
+        entry["finishTime"] = results[i].finishTime;
+        entry["roundPoints"] = results[i].roundPoints;
+        ranked.Add(entry);
     }
-    j["ranked"] = arr;
+    j["ranked"] = ranked;
     DevTrace("rankedResults", j);
 }
 

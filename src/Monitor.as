@@ -274,7 +274,7 @@ class RaceMonitor {
 
         PlayerFinishData@[] players;
         for (uint i = 0; i < results.Length; i++) {
-            players.InsertLast(PlayerFinishData(results[i].wsid, results[i].finishTime, i + 1));
+            players.InsertLast(PlayerFinishData(results[i].webServicesUserId, results[i].finishTime, i + 1));
         }
 #if DEV
         DevTraceRankedResults(this, results);
