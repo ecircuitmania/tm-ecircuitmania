@@ -86,7 +86,9 @@ class RaceMonitor {
         if (currState == RaceState::Active) {
             UpdateActive();
         }
+#if DEV
         DevWatchScores(this);
+#endif
     }
 
     void OnNewMap() {
@@ -110,7 +112,9 @@ class RaceMonitor {
     }
 
     void UpdateState(RaceState old, RaceState new) {
+#if DEV
         DevTraceState(this, old, new);
+#endif
         currState = new;
         switch(new) {
         case RaceState::NoMap: return;
@@ -201,7 +205,9 @@ class RaceMonitor {
     }
 
     void AddPlayerFinish(const MLFeed::PlayerCpInfo_V4@ player) {
+#if DEV
         DevTraceDetect(this, player);
+#endif
         if (HasPlayerFinished(player.LoginMwId.Value)) {
             Dev_Notify("Player already finished: " + player.Login);
             return;
@@ -227,7 +233,9 @@ class RaceMonitor {
 
     void SendPlayerFinish(ref@ pref) {
         RoundResult@ result = cast<RoundResult>(pref);
+#if DEV
         DevTracePlayerFinishSend(this, result);
+#endif
         PlayerFinishMsgs_Sent++;
         ECMResponse@ r = AddOnPlayerFinishReq(apiKey, matchId, Json::Write(MakePlayerFinishPayload(result.wsid, result.finishTime, result.round, mapUid)));
         if (r.success) {
@@ -276,7 +284,9 @@ class RaceMonitor {
     }
 
     void OnEndRound(RaceState prior) {
+#if DEV
         DevTraceEndRound(this, prior);
+#endif
         if (prior == RaceState::Active) {
             startnew(CoroutineFunc(SendOnRoundEnd));
         } else {
@@ -309,7 +319,9 @@ class RaceMonitor {
 
         RoundEndMsgs_Sent++;
         auto payload = MakeRoundEndPayloadFromResults(results, round);
+#if DEV
         DevTraceRoundEndPayload(this, payload);
+#endif
         ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(payload));
         if (r.success) {
             RoundEndMsgs_Succeeded++;
@@ -374,7 +386,9 @@ class RaceMonitor {
 
         LearnServerSignals(rd, results, localPlayer, unfinishedRp);
         if (!roundPointsSignalSeen && !prevRaceSignalSeen) {
+#if DEV
             DevTraceLocalGate(this, "no server signal in this mode, keeping EndRound result", localPlayer, false, 0);
+#endif
             return;
         }
 
@@ -407,7 +421,9 @@ class RaceMonitor {
         while (true) {
             // Checked before this frame's confirmation: the commit resets round points.
             if (commit.Committed()) {
+#if DEV
                 DevTraceLocalGate(this, "score commit", localPlayer, confirmed, Time::Now - start);
+#endif
                 return confirmed ? ServerVerdict::Finished : ServerVerdict::Dnf;
             }
             if (!confirmed) confirmed = ServerConfirmedFinish(localPlayer, unfinishedRp);
@@ -415,7 +431,9 @@ class RaceMonitor {
             if (currState != RaceState::EndRound_or_Similar) break;
             yield();
         }
+#if DEV
         DevTraceLocalGate(this, "stopped before commit", localPlayer, confirmed, Time::Now - start);
+#endif
         return ServerVerdict::Unknown;
     }
 
@@ -463,7 +481,9 @@ class RaceMonitor {
         for (uint i = 0; i < results.Length; i++) {
             players.InsertLast(PlayerFinishData(results[i].wsid, results[i].finishTime, i + 1));
         }
+#if DEV
         DevTraceRankedResults(this, results);
+#endif
         return MakeRoundEndPayload(players, round, mapUid);
     }
 
