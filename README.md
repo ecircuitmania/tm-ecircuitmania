@@ -71,10 +71,11 @@ Every player's result comes from MLFeed, and the server has the final say.
 MLHook can stop delivering events to MLFeed, for example when a plugin's event
 handling takes too long. MLFeed then stops updating and the rounds sent to ECM
 are incomplete. The plugin compares MLFeed with the game: if a player's current
-run is missing from MLFeed for 3 seconds, a red warning appears in the window,
-and an error notification pops up once your car isn't on track. Reload
-"MLFeed: Race Data" in Openplanet's Plugin Manager (or restart the game), then
-start monitoring again.
+run is missing from MLFeed for 3 seconds while MLFeed receives no updates at
+all, a red warning appears in the window, and an error notification pops up
+once your car isn't on track. The warning stays until you restart monitoring.
+Reload "MLFeed: Race Data" in Openplanet's Plugin Manager (or restart the game),
+then start monitoring again; the round count carries on.
 
 ## Developing
 

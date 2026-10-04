@@ -4,8 +4,10 @@
 //
 // The check: every player the engine shows in a run that started at least StartGraceMs ago must be
 // listed by MLFeed with the same StartTime. Spectators don't start runs, so their stale StartTimes
-// still match. A mismatch lasting FailAfterMs means the feed has stopped, and the warning stays up
-// until monitoring is restarted.
+// still match. MLFeed only hears of a StartTime with an event about checkpoints, respawns, spawn status
+// or best times, so a run it hasn't heard of yet also mismatches; but a stalled feed receives no events
+// at all. So the feed counts as stopped once a mismatch has lasted FailAfterMs with MLFeed's
+// UpdateNonce unchanged, and the warning then stays up until monitoring is restarted.
 class FeedHealthCheck {
     uint CheckEveryMs = 500;
     uint FailAfterMs = 3000;
@@ -16,28 +18,46 @@ class FeedHealthCheck {
     bool notified = false;
     uint lastCheck = 0;
     uint mismatchSince = 0;
+    // MLFeed's UpdateNonce when the mismatch clock last started. MLFeed also bumps it when it resets for a
+    // new map, which only restarts the clock.
+    uint mismatchNonce = 0;
 
-    // Update compares MLFeed with the engine every CheckEveryMs, and marks the feed stalled once a mismatch has lasted FailAfterMs.
+    // Update compares MLFeed with the engine every CheckEveryMs, and marks the feed stalled once a mismatch has lasted FailAfterMs without MLFeed receiving anything.
     void Update() {
         MaybeNotify();
         if (stalled || Time::Now - lastCheck < CheckEveryMs) return;
         lastCheck = Time::Now;
-        string mismatch = FindMismatch();
+        auto raceData = MLFeed::GetRaceData_V4();
+        string mismatch = FindMismatch(raceData);
         if (mismatch.Length == 0) {
             mismatchSince = 0;
             return;
         }
-        if (mismatchSince == 0) mismatchSince = Time::Now;
+        uint nonce = FeedUpdateNonce(raceData);
+        if (mismatchSince == 0 || nonce != mismatchNonce) {
+            mismatchSince = Time::Now;
+            mismatchNonce = nonce;
+            return;
+        }
         if (Time::Now - mismatchSince < FailAfterMs) return;
         stalled = true;
         warn("MLFeed is not receiving race data: " + mismatch);
     }
 
+    // FeedUpdateNonce returns MLFeed's UpdateNonce, which moves whenever MLFeed handles an event.
+    uint FeedUpdateNonce(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
+        uint nonce = 0;
+        if (raceData !is null) nonce = raceData.UpdateNonce;
+#if DEV
+        nonce = DevSimulatedUpdateNonce(nonce);
+#endif
+        return nonce;
+    }
+
     // FindMismatch describes the first player whose current run MLFeed hasn't seen, or returns "" if MLFeed agrees with the engine.
-    string FindMismatch() {
+    string FindMismatch(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
         auto playground = GetApp().CurrentPlayground;
         if (playground is null) return "";
-        auto raceData = MLFeed::GetRaceData_V4();
         if (raceData is null) return "MLFeed returned no race data";
         int gameTime = MLFeed::GameTime;
         for (uint i = 0; i < playground.Players.Length; i++) {

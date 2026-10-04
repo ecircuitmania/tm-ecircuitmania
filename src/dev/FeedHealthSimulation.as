@@ -19,4 +19,21 @@ int DevSimulatedFeedStartTime(const string &in login, int startTime) {
     if (!devFrozenFeedStartTimes.Exists(login)) devFrozenFeedStartTimes[login] = startTime;
     return int(devFrozenFeedStartTimes[login]);
 }
+
+// MLFeed's UpdateNonce when the simulated stall began, so the simulated feed also stops receiving events.
+bool devUpdateNonceFrozen = false;
+uint devFrozenUpdateNonce = 0;
+
+// DevSimulatedUpdateNonce returns MLFeed's UpdateNonce from when the simulated stall began, or the live one while the simulation is off.
+uint DevSimulatedUpdateNonce(uint nonce) {
+    if (!S_DevSimulateFeedStall) {
+        devUpdateNonceFrozen = false;
+        return nonce;
+    }
+    if (!devUpdateNonceFrozen) {
+        devFrozenUpdateNonce = nonce;
+        devUpdateNonceFrozen = true;
+    }
+    return devFrozenUpdateNonce;
+}
 #endif
