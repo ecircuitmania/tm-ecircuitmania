@@ -7,18 +7,16 @@
 [Setting category="Dev" name="Simulate MLFeed stall (feed health test)"]
 bool S_DevSimulateFeedStall = false;
 
-// MLFeed's view of each player, by login, when the simulated stall began.
-dictionary devFrozenFeedViews;
+// The StartTime MLFeed listed for each player, by login, when the simulated stall began.
+dictionary devFrozenFeedStartTimes;
 
-// DevSimulatedFeedView returns the player's view from when the simulated stall began, or the live view while the simulation is off.
-FeedPlayerView@ DevSimulatedFeedView(const string &in login, FeedPlayerView@ view) {
+// DevSimulatedFeedStartTime returns the player's StartTime from when the simulated stall began, or the live one while the simulation is off.
+int DevSimulatedFeedStartTime(const string &in login, int startTime) {
     if (!S_DevSimulateFeedStall) {
-        if (devFrozenFeedViews.GetSize() > 0) devFrozenFeedViews.DeleteAll();
-        return view;
+        if (devFrozenFeedStartTimes.GetSize() > 0) devFrozenFeedStartTimes.DeleteAll();
+        return startTime;
     }
-    FeedPlayerView@ frozen;
-    if (devFrozenFeedViews.Get(login, @frozen)) return frozen;
-    devFrozenFeedViews.Set(login, @view);
-    return view;
+    if (!devFrozenFeedStartTimes.Exists(login)) devFrozenFeedStartTimes[login] = startTime;
+    return int(devFrozenFeedStartTimes[login]);
 }
 #endif

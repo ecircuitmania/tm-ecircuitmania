@@ -152,12 +152,6 @@ void DrawNoMonitor() {
     UI::EndDisabled();
 }
 
-// NotifySuccess shows a green notification.
-void NotifySuccess(const string &in message) {
-    UI::ShowNotification(Meta::ExecutingPlugin().Name, message, vec4(.4, .7, .1, .3), 10000);
-    trace("Notified: " + message);
-}
-
 // NotifyError logs an error and shows it as a red notification.
 void NotifyError(const string &in message) {
     warn(message);
