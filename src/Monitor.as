@@ -254,7 +254,10 @@ class RaceMonitor {
             if (player.RequestsSpectate) continue;
             if (player.CpCount == 0) continue;
             if (finishedPlayerLoginIds.Find(player.LoginMwId.Value) >= 0) continue;
-            results.InsertLast(RoundResultFromPlayer(player, true));
+            // No longer in the race list, so they left mid-round: never a finish.
+            auto result = RoundResultFromPlayer(player);
+            result.MaybeMarkDnf();
+            results.InsertLast(result);
             finishedPlayerLoginIds.InsertLast(player.LoginMwId.Value);
         }
 

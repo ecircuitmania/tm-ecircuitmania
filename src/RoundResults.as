@@ -21,17 +21,24 @@ class RoundResult {
 
     bool get_Finished() const { return finishTime >= 0; }
     int get_LastCpTime() const { return cpTimes.Length == 0 ? -1 : cpTimes[cpTimes.Length - 1]; }
+
+    // For a finish MLFeed shows but the round doesn't count. The finish crossing
+    // is dropped too, so the DNF ranks by the checkpoints reached before it.
+    void MaybeMarkDnf() {
+        if (Finished && cpTimes.Length > 0) cpTimes.RemoveLast();
+        finishTime = -1;
+    }
 }
 
 // Build a RoundResult from MLFeed's current view of a player.
 // Call at round end: by then MLFeed holds the server-corrected times.
-RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player, bool forceDnf = false) {
+RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
     int[] cps;
     auto raw = player.CpTimes;
     // MLFeed's CpTimes has a leading 0 for the start.
     for (uint i = 1; i < raw.Length; i++) cps.InsertLast(raw[i]);
-    int ft = (!forceDnf && player.IsFinished) ? player.LastCpTime : -1;
-    RoundResult@ rr = RoundResult(player.WebServicesUserId, player.Name, ft, cps, player.Points);
+    int finishTime = player.IsFinished ? player.LastCpTime : -1;
+    RoundResult@ rr = RoundResult(player.WebServicesUserId, player.Name, finishTime, cps, player.Points);
     rr.roundPoints = player.RoundPoints;
     return rr;
 }
