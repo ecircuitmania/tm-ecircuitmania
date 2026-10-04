@@ -83,6 +83,9 @@ class RaceMonitor {
 
 
     void UpdateState(RaceState old, RaceState new) {
+#if DEV
+        DevTraceState(this, old, new);
+#endif
         currState = new;
         switch (new) {
             case RaceState::NoMap: return;
@@ -130,6 +133,9 @@ class RaceMonitor {
     }
 
     void AddPlayerFinish(const MLFeed::PlayerCpInfo_V4@ player) {
+#if DEV
+        DevTraceDetect(this, player);
+#endif
         if (HasPlayerFinished(player.LoginMwId.Value)) {
             Dev_Notify("Player already finished: " + player.Login);
             return;
@@ -192,6 +198,9 @@ class RaceMonitor {
     }
 
     void OnEndRound(RaceState prior) {
+#if DEV
+        DevTraceEndRound(this, prior);
+#endif
         if (prior == RaceState::Active) {
             startnew(CoroutineFunc(SendOnRoundEnd));
         } else {
@@ -220,7 +229,11 @@ class RaceMonitor {
 
     void SendOnRoundEnd() {
         RoundEndMsgs_Sent++;
-        ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(GetRoundEndPayload()));
+        auto payload = GetRoundEndPayload();
+#if DEV
+        DevTraceRoundEndPayload(this, payload);
+#endif
+        ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(payload));
         if (r.success) {
             RoundEndMsgs_Succeeded++;
             lastSuccessMsg = r.message;
