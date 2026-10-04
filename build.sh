@@ -64,7 +64,8 @@ for pluginSrc in ${pluginSources[@]}; do
 
   function buildPlugin {
     # 7z a ./$BUILD_NAME ./fonts ./$pluginSrc/* ./LICENSE ./README.md
-    7z a ./$BUILD_NAME ./$pluginSrc/* ./LICENSE ./README.md
+    # src/dev/ is dev-only: every call into it is inside #if DEV.
+    7z a ./$BUILD_NAME ./$pluginSrc/* ./LICENSE ./README.md '-xr!dev'
 
     cp -v $BUILD_NAME $RELEASE_NAME
 
