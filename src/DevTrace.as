@@ -1,50 +1,42 @@
 // Dev-only tracing.
 // Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
-// Omitted from release builds.
+//
+// Never shipped: package.sh leaves this file out of release packages, so call
+// anything declared here only from inside an #if DEV block.
+#if DEV
 
 void DevTrace(const string&in ev, Json::Value@ data) {
-#if DEV
     data["ev"] = ev;
     data["now"] = Time::Now;
     data["gt"] = MLFeed::GameTime;
     print("[ECMTRACE] " + Json::Write(data));
-#endif
 }
 
-#if DEV
 [Setting category="Dev" name="Dry run (never send HTTP requests)"]
 bool S_DevDryRun = true;
-#endif
 
 // True when the request should be skipped instead of sent to ECM.
 bool DevDryRun(const string&in url, const string&in payload) {
-#if DEV
     if (S_DevDryRun) {
         print("DRY RUN, not sent: " + url);
         print("Payload: " + payload);
         return true;
     }
-#endif
     return false;
 }
 
 void DevTraceState(RaceMonitor@ m, RaceState old, RaceState new) {
-#if DEV
     auto j = DevRaceJson();
     j["from"] = tostring(old);
     j["to"] = tostring(new);
     j["round"] = m.currRound;
     DevTrace("state", j);
-#endif
 }
 
-#if DEV
 dictionary devDetectLogged;
-#endif
 
 // Rejected finishes are re-detected every frame, so each is logged only once.
 void DevTraceDetect(RaceMonitor@ m, const MLFeed::PlayerCpInfo_V4@ player) {
-#if DEV
     string key = player.Login + "/" + m.currRound + "/" + player.StartTime;
     if (devDetectLogged.Exists(key)) return;
     devDetectLogged[key] = true;
@@ -56,30 +48,24 @@ void DevTraceDetect(RaceMonitor@ m, const MLFeed::PlayerCpInfo_V4@ player) {
     j["accepted"] = !alreadyFinished && player.StartTime >= m.activeStartTime && m.currRound != 0;
     j["detectIndex"] = m.finishedPlayers.Length;
     DevTrace("detect", j);
-#endif
 }
 
 void DevTraceEndRound(RaceMonitor@ m, RaceState prior) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     j["prior"] = tostring(prior);
     j["players"] = DevAllPlayersJson();
     DevTrace("endRoundSnapshot", j);
     startnew(DevTraceEndRoundDelayed, m.currRound);
-#endif
 }
 
 void DevTraceRoundEndPayload(RaceMonitor@ m, Json::Value@ payload) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     j["payload"] = payload;
     DevTrace("roundEndPayload", j);
-#endif
 }
 
-#if DEV
 void DevTraceEndRoundDelayed(int64 round) {
     sleep(3000);
     auto j = Json::Object();

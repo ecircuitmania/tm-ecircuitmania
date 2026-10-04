@@ -34,10 +34,7 @@ jobs:
       
       - name: Create plugin package
         if: steps.check_tag.outputs.exists == 'false'
-        run: |
-          mkdir -p build
-          zip -r build/ecircuitmaniadata.zip src/ vendor/ info.toml 
-          mv build/ecircuitmaniadata.zip build/ecircuitmaniadata.op
+        run: ./package.sh build/ecircuitmaniadata.op
       
       - name: Create Release
         if: steps.check_tag.outputs.exists == 'false'

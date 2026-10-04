@@ -46,7 +46,9 @@ ECMResponse@ AddOnEndRoundReq(const string &in apiKey, const string &in matchId,
 
 
 ECMResponse@ MakeRequestEcircuit(const string &in apiKey, const string &in url, const string &in payload) {
+#if DEV
     if (DevDryRun(url, payload)) return ECMResponse(true, 0, "dry run");
+#endif
     Net::HttpRequest@ req = Net::HttpRequest();
     req.Method = Net::HttpMethod::Post;
     req.Url = url;
