@@ -29,7 +29,7 @@ void UpdateEarlyLoop() {
     }
 }
 
-RaceMonitor@ g_monitor;
+RaceMonitor@ raceMonitor;
 bool IsPlaygroundLoaded;
 uint lastMapMwId = 0;
 string mapUid;
@@ -38,9 +38,9 @@ bool NewMapThisFrame = false;
 // UpdateEarly tracks the loaded map and updates the monitor, stopping it when we leave the server.
 void UpdateEarly() {
     auto game = GetApp();
-    if (g_monitor !is null && !IsInServer()) {
+    if (raceMonitor !is null && !IsInServer()) {
         print("On menu, stopping monitoring.");
-        @g_monitor = null;
+        @raceMonitor = null;
     }
 
     IsPlaygroundLoaded = game.Editor is null && game.RootMap !is null && game.CurrentPlayground !is null;
@@ -57,8 +57,8 @@ void UpdateEarly() {
         mapUid = "";
     }
 
-    if (g_monitor !is null) {
-        g_monitor.Update();
+    if (raceMonitor !is null) {
+        raceMonitor.Update();
     }
 }
 
@@ -78,10 +78,10 @@ void RenderInterface() {
         UI::PushItemWidth(Math::Max(UI::GetContentRegionAvail().x * .3, 100));
         if (!IsPlaygroundLoaded) {
             DrawNoMap();
-        } else if (g_monitor is null) {
+        } else if (raceMonitor is null) {
             DrawNoMonitor();
         } else {
-            g_monitor.DrawWindowInner();
+            raceMonitor.DrawWindowInner();
         }
         UI::PopItemWidth();
     }
@@ -108,7 +108,7 @@ void DrawLogo() {
 void DrawNoMap() {
     UI::AlignTextToFramePadding();
     UI::Text("No map loaded.");
-    if (g_monitor !is null) {
+    if (raceMonitor !is null) {
         DrawStopMonitoringButton();
     }
 }
@@ -117,66 +117,39 @@ void DrawNoMap() {
 void DrawStopMonitoringButton() {
     UI::Separator();
     if (UI::Button("Stop Monitoring")) {
-        @g_monitor = null;
+        @raceMonitor = null;
     }
 }
 
 string matchIdApiKeyInput;
-string matchId;
-string apiKey;
-bool matchIdApiKeyValid = false;
-string matchIdApiKeyError = "Empty Input. Please paste API Key";
 string lastMatchIdApiKey;
 
-// DrawNoMonitor draws the API key input and the button that starts monitoring.
+// DrawNoMonitor draws the "<matchId>_<apiKey>" input and the button that starts monitoring.
 void DrawNoMonitor() {
     UI::Text("Not currently monitoring.");
     UI::Separator();
+    // Not read: only this form of InputText with the Password flag has compiled in this repo.
     bool changed;
     matchIdApiKeyInput = UI::InputText("Paste API Key", matchIdApiKeyInput, changed, UI::InputTextFlags::Password);
-    bool useLast = false;
     if (lastMatchIdApiKey.Length > 0) {
         UI::SameLine();
-        useLast = UI::Button("Use Last");
+        if (UI::Button("Use Last")) matchIdApiKeyInput = lastMatchIdApiKey;
     }
-    if (useLast) {
-        matchIdApiKeyInput = lastMatchIdApiKey;
-        changed = true;
-    }
-    if (changed) {
-        ParseMatchIdApiKey();
-    }
-    if (!matchIdApiKeyValid) {
-        UI::TextWrapped("\\$f80 " + Icons::ExclamationTriangle + "\\$z " + matchIdApiKeyError);
+    auto parts = matchIdApiKeyInput.Split("_");
+    bool valid = parts.Length == 2;
+    if (!valid) {
+        string error = "Empty Input. Please paste API Key";
+        if (matchIdApiKeyInput.Length > 0) error = "Invalid input. Expected 1 underscore but found " + (int(parts.Length) - 1);
+        UI::TextWrapped("\\$f80 " + Icons::ExclamationTriangle + "\\$z " + error);
     }
     UI::Separator();
-    UI::BeginDisabled(!matchIdApiKeyValid || !IsInServer());
+    UI::BeginDisabled(!valid || !IsInServer());
     if (UI::Button("Start Monitoring")) {
-        ParseMatchIdApiKey();
-        if (matchIdApiKeyValid) {
-            @g_monitor = RaceMonitor(matchId, apiKey);
-            lastMatchIdApiKey = matchIdApiKeyInput;
-            matchIdApiKeyInput = "";
-            ParseMatchIdApiKey();
-        } else {
-            NotifyWarning("Invalid Match ID & API Key input.");
-        }
+        @raceMonitor = RaceMonitor(parts[0], parts[1]);
+        lastMatchIdApiKey = matchIdApiKeyInput;
+        matchIdApiKeyInput = "";
     }
     UI::EndDisabled();
-}
-
-// ParseMatchIdApiKey splits the pasted "<matchId>_<apiKey>" input into matchId and apiKey.
-void ParseMatchIdApiKey() {
-    auto parts = matchIdApiKeyInput.Split("_");
-    if (parts.Length == 2) {
-        matchId = parts[0];
-        apiKey = parts[1];
-        matchIdApiKeyValid = true;
-        matchIdApiKeyError = "";
-    } else {
-        matchIdApiKeyValid = false;
-        matchIdApiKeyError = "Invalid input. Expected 1 underscore but found " + (int(parts.Length) - 1);
-    }
 }
 
 // NotifySuccess shows a green notification.
@@ -189,12 +162,6 @@ void NotifySuccess(const string &in message) {
 void NotifyError(const string &in message) {
     warn(message);
     UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Error", message, vec4(.9, .3, .1, .3), 15000);
-}
-
-// NotifyWarning logs a warning and shows it as an orange notification.
-void NotifyWarning(const string &in message) {
-    warn(message);
-    UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Warning", message, vec4(.9, .6, .2, .3), 15000);
 }
 
 // IsInServer reports whether this client is connected to a server.

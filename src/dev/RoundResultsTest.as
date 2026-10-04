@@ -7,12 +7,31 @@
 // TestRoundResult builds a result whose name and ID are both webServicesUserId, from comma-separated checkpoint times.
 RoundResult@ TestRoundResult(const string &in webServicesUserId, int finishTime, const string &in cpTimesCsv, int points = 0) {
     int[] cpTimes;
-    auto parts = cpTimesCsv.Split(",");
-    for (uint i = 0; i < parts.Length; i++) cpTimes.InsertLast(Text::ParseInt(parts[i]));
+    if (cpTimesCsv.Length > 0) {
+        auto parts = cpTimesCsv.Split(",");
+        for (uint i = 0; i < parts.Length; i++) cpTimes.InsertLast(Text::ParseInt(parts[i]));
+    }
     return RoundResult(webServicesUserId, webServicesUserId, finishTime, cpTimes, points);
 }
 
-// RunRoundResultTests checks the ranking and the server-verdict handling, and logs any failure.
+// TestRejected returns the verdict on a finish, from the evidence gathered by the end of the wait.
+bool TestRejected(bool scoreCommitSeen, bool finishShown, bool haveSample, bool serverConfirmed) {
+    LocalFinishVerdict verdict;
+    verdict.haveSample = haveSample;
+    verdict.serverConfirmed = serverConfirmed;
+    verdict.Decide(scoreCommitSeen, finishShown);
+    return verdict.rejected;
+}
+
+// TestConfirms reports whether a score record confirms a finish, given the sample taken while the runner was racing.
+bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, int roundPoints, const string &in previousRaceTimes) {
+    LocalFinishVerdict verdict;
+    verdict.sampledRoundPoints = sampledRoundPoints;
+    verdict.sampledPreviousRaceTimes = sampledPreviousRaceTimes;
+    return verdict.ServerConfirms(roundPoints, previousRaceTimes);
+}
+
+// RunRoundResultTests checks the ranking and the plugin runner's verdict, and logs any failure.
 void RunRoundResultTests() {
     uint failed = 0;
 
@@ -53,32 +72,49 @@ void RunRoundResultTests() {
     // 5. A finish marked DNF ranks by the CPs before it, not with the finish as an extra CP.
     {
         auto rejected = TestRoundResult("rejected", 20000, "5000,9000,20000", 0);
-        rejected.MaybeMarkDnf();
+        rejected.MarkDnf();
         array<RoundResult@> results;
         results.InsertLast(rejected);
         results.InsertLast(TestRoundResult("dnf", -1, "5000,8000", 0));
         SortRoundResults(results);
-        if (rejected.Finished || results[0].webServicesUserId != "dnf") { failed++; warn("RoundResult test 5 failed: MaybeMarkDnf"); }
+        if (rejected.Finished || results[0].webServicesUserId != "dnf") { failed++; warn("RoundResult test 5 failed: MarkDnf"); }
     }
-    // 6. A DNF verdict drops the finish this client showed.
+    // 6. A DNF that never reached checkpoint 1 ranks after DNFs that did.
+    {
+        array<RoundResult@> results;
+        results.InsertLast(TestRoundResult("afk", -1, "", 0));
+        results.InsertLast(TestRoundResult("dnf", -1, "5000", 0));
+        results.InsertLast(TestRoundResult("fin", 30000, "5000,30000", 0));
+        SortRoundResults(results);
+        if (results[0].webServicesUserId != "fin" || results[1].webServicesUserId != "dnf" || results[2].webServicesUserId != "afk") { failed++; warn("RoundResult test 6 failed: 0-checkpoint DNF ordering"); }
+    }
+    // 7. A rejected finish is marked on a copy, leaving the result read from MLFeed as it was.
     {
         auto shown = TestRoundResult("local", 20450, "11448,20450", 0);
-        auto result = ApplyServerVerdict(shown, TestRoundResult("local", 20129, "11448,20129", 0), ServerVerdict::Dnf);
-        if (result.Finished || result.cpTimes.Length != 1) { failed++; warn("RoundResult test 6 failed: DNF verdict"); }
+        auto dnf = shown.Copy();
+        dnf.MarkDnf();
+        if (dnf.Finished || dnf.cpTimes.Length != 1 || !shown.Finished || shown.cpTimes.Length != 2) { failed++; warn("RoundResult test 7 failed: DNF on a copy"); }
     }
-    // 7. A finish the server confirmed but this client no longer shows uses the first-seen run, which still ends with its finish.
+    // 8. The runner's finish is a DNF only when the commit was seen, a sample exists and the server never confirmed it.
     {
-        auto shown = TestRoundResult("local", -1, "6860", 0);
-        auto result = ApplyServerVerdict(shown, TestRoundResult("local", 9807, "6860,9807", 0), ServerVerdict::Finished);
-        if (result.finishTime != 9807 || result.LastCpTime != result.finishTime) { failed++; warn("RoundResult test 7 failed: confirmed finish not shown"); }
+        bool passed = TestRejected(true, true, true, false)
+            && !TestRejected(true, true, true, true)
+            && !TestRejected(false, true, true, false)
+            && !TestRejected(true, true, false, false)
+            && !TestRejected(true, false, true, false);
+        if (!passed) { failed++; warn("RoundResult test 8 failed: local finish verdict"); }
     }
-    // 8. A confirmed finish this client shows keeps MLFeed's final time; no verdict changes nothing.
+    // 9. Confirmation: round points moved off the sample and not 0, or PrevRaceTimes changed.
     {
-        auto shown = TestRoundResult("local", 10130, "6860,10130", 0);
-        auto firstSeen = TestRoundResult("local", 9807, "6860,9807", 0);
-        auto confirmed = ApplyServerVerdict(shown, firstSeen, ServerVerdict::Finished);
-        auto unknown = ApplyServerVerdict(shown, firstSeen, ServerVerdict::Unknown);
-        if (confirmed.finishTime != 10130 || unknown.finishTime != 10130) { failed++; warn("RoundResult test 8 failed: confirmed or unknown verdict"); }
+        bool passed = TestConfirms(-20, "", -2, "")
+            && TestConfirms(0, "", 6, "")
+            && !TestConfirms(0, "", 0, "")
+            && !TestConfirms(-20, "", 0, "")
+            && !TestConfirms(-20, "", -20, "")
+            && TestConfirms(0, "", 0, "5000,9000")
+            && TestConfirms(0, "4000,8000", 0, "5000,9000")
+            && !TestConfirms(0, "4000,8000", 0, "4000,8000");
+        if (!passed) { failed++; warn("RoundResult test 9 failed: server confirmation"); }
     }
 
     if (failed == 0) print("RoundResult tests: all passed");

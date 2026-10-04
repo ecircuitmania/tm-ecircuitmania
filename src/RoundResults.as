@@ -8,8 +8,6 @@ class RoundResult {
     // For a finish, the last entry is the finish itself.
     int[] cpTimes;
     int points = 0;
-    // Server-assigned round points, kept for dev cross-checks only.
-    int roundPoints = 0;
 
     // RoundResult creates a result from the values the ranking uses.
     RoundResult(const string &in webServicesUserId, const string &in name, int finishTime, const int[] &in cpTimes, int points) {
@@ -26,24 +24,26 @@ class RoundResult {
     // get_LastCpTime returns the time at the last checkpoint reached, or -1 if none.
     int get_LastCpTime() const { return cpTimes.Length == 0 ? -1 : cpTimes[cpTimes.Length - 1]; }
 
-    // MaybeMarkDnf records a DNF for a finish this client showed but the server didn't count.
-    // The finish crossing is dropped too, so the DNF ranks by the checkpoints reached before it.
-    void MaybeMarkDnf() {
+    // Copy returns an independent copy of this result.
+    RoundResult@ Copy() const {
+        return RoundResult(webServicesUserId, name, finishTime, cpTimes, points);
+    }
+
+    // MarkDnf records a DNF, dropping a finish crossing so the DNF ranks by the checkpoints reached before it.
+    void MarkDnf() {
         if (Finished && cpTimes.Length > 0) cpTimes.RemoveLast();
         finishTime = -1;
     }
 }
 
-// RoundResultFromPlayer builds a RoundResult from MLFeed's current view of a player.
+// RoundResultFromPlayer builds a RoundResult from MLFeed's current view of a player; for the plugin runner this view is a guess until the server corrects it.
 RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
     int[] cpTimes;
     auto feedCpTimes = player.CpTimes;
     // MLFeed's CpTimes has a leading 0 for the start.
     for (uint i = 1; i < feedCpTimes.Length; i++) cpTimes.InsertLast(feedCpTimes[i]);
     int finishTime = player.IsFinished ? player.LastCpTime : -1;
-    RoundResult@ result = RoundResult(player.WebServicesUserId, player.Name, finishTime, cpTimes, player.Points);
-    result.roundPoints = player.RoundPoints;
-    return result;
+    return RoundResult(player.WebServicesUserId, player.Name, finishTime, cpTimes, player.Points);
 }
 
 // RoundResultLess reports whether first should be ranked ahead of second, following Nadeo's tiebreak order.
@@ -62,7 +62,7 @@ bool RoundResultLess(const RoundResult@ first, const RoundResult@ second) {
             secondIndex--;
         }
     } else {
-        // No finish: more checkpoints is better, then earlier time at the last one.
+        // No finish: more checkpoints is better (none ranks last), then earlier time at the last one.
         if (first.cpTimes.Length != second.cpTimes.Length) return first.cpTimes.Length > second.cpTimes.Length;
         if (first.LastCpTime != second.LastCpTime) return first.LastCpTime < second.LastCpTime;
     }

@@ -1,31 +1,59 @@
-// RoundTracker follows one round from going Active until its report is sent:
-// who took part, and what the server said about the plugin runner's own finish.
+// Where round results come from: every player's result is read from MLFeed,
+// and the server has the final say.
+// - Other players: their checkpoint and finish times only reach this client
+//   after the server has validated them, so MLFeed's view of them is the server's.
+// - The plugin runner: this client records its own checkpoints and finish at once,
+//   before the server has seen them, so MLFeed first shows a guess.
+//   - Times: the game later corrects them to the server's. RoundEntry.ReadResult
+//     re-reads until the server's score commit, so the corrected time is the one sent.
+//   - The finish itself is never corrected: a finish the server rejected still
+//     shows as one. It only counts if the server's score record (CSmArenaScore)
+//     confirms it, through PrevRaceTimes or RoundPoints depending on the mode.
+//     See LocalFinishVerdict.
+
+// RoundTracker follows one round from going Active until its report is sent: who drove in it, and their results.
+// Round-based modes spawn everyone together, so a round's runs share one StartTime: the latest StartTime of a
+// player MLFeed shows driving (spawned, or past a checkpoint) and not spectating. Older runs, such as a
+// spectator's last run, belong to earlier rounds. In modes where players restart on their own, like Time
+// Attack, only the newest run start counts, so other players are left out.
 class RoundTracker {
-    // Set when the round ends, so the report can't pick up the next round's values.
-    int number = 0;
-    string mapUid;
-    // Runs that started before this game time are leftovers (e.g. from warmup) and don't count.
-    uint startGameTime;
+    int number;
+    // Runs that started at or before the previous round's start never belong to this round.
+    uint previousRoundStartTime;
+    // This round's start, 0 until a player is seen driving.
+    uint startTime = 0;
     string localLogin;
-    // Everyone who raced this round, by login.
+    // Everyone seen driving while the round was Active, with their login IDs in entryLoginIds.
+    // Runs later found to be from an earlier round stay listed, and IsThisRound tells them apart.
     array<RoundEntry@> entries;
     uint[] entryLoginIds;
     RoundEntry@ localEntry;
-    LocalFinishCheck localFinish;
+    LocalFinishVerdict localFinishVerdict;
+    // Set at EndRound, for the report.
+    string mapUid;
+    int64 timestamp = 0;
 
-    // RoundTracker starts tracking a round whose runs start at or after startGameTime.
-    RoundTracker(uint startGameTime, const string &in localLogin, ServerFinishSignals@ finishSignals) {
-        this.startGameTime = startGameTime;
+    // RoundTracker starts tracking round number, whose runs start after previousRoundStartTime.
+    RoundTracker(int number, uint previousRoundStartTime, const string &in localLogin) {
+        this.number = number;
+        this.previousRoundStartTime = previousRoundStartTime;
         this.localLogin = localLogin;
-        @localFinish.signals = finishSignals;
     }
 
-    // Track adds every player racing this round and re-reads every result. Call every frame while the round is Active.
-    void Track(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
+    // WatchRace adds everyone MLFeed shows driving this round and re-reads their results, every frame while the round is Active.
+    void WatchRace(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
         for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
             auto player = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
-            // Not past the start yet, or a run from before this round.
-            if (player.CpCount == 0 || player.StartTime < startGameTime) continue;
+            // Only positive evidence of driving counts: spawned, or past a checkpoint, in a run newer than the previous round's.
+            bool driving = player.IsSpawned || player.CpCount > 0;
+            if (!driving || player.StartTime <= previousRoundStartTime) continue;
+            if (!player.RequestsSpectate && player.StartTime > startTime) {
+                startTime = player.StartTime;
+#if DEV
+                DevTraceRoundStart(this, player);
+#endif
+            }
+            if (player.StartTime < startTime) continue;
             int index = entryLoginIds.Find(player.LoginMwId.Value);
             if (index < 0) {
                 RoundEntry@ entry = RoundEntry(player);
@@ -33,38 +61,52 @@ class RoundTracker {
                 entryLoginIds.InsertLast(player.LoginMwId.Value);
                 if (player.Login == localLogin) @localEntry = entry;
             } else if (entries[uint(index)].player !is player || entries[uint(index)].runStartTime != player.StartTime) {
-                // A rejoin gets a new MLFeed object; a restart gets a new start time.
+                // A rejoin gets a new MLFeed object, and a round restarted without an end gets new runs.
                 entries[uint(index)].StartRun(player);
             }
         }
-        RefreshEntries();
-        localFinish.Track(localEntry, entries);
+        for (uint i = 0; i < entries.Length; i++) {
+            entries[i].ReadResult();
+            // Only read while the round is Active, so the report sees who was spectating at EndRound.
+            if (entries[i].RunIsCurrent) entries[i].spectating = entries[i].player.RequestsSpectate;
+        }
     }
 
-    // Refresh re-reads the runs already tracked, without taking new ones. Call every frame after the round has ended.
-    void Refresh() {
-        RefreshEntries();
-        localFinish.Watch(localEntry, entries);
+    // WatchEndOfRound re-reads results during the end-of-round wait, keeping the roster and spectators as they were at EndRound.
+    void WatchEndOfRound() {
+        for (uint i = 0; i < entries.Length; i++) entries[i].ReadResult();
     }
 
-    // RefreshEntries re-reads every entry's result from MLFeed.
-    void RefreshEntries() {
-        for (uint i = 0; i < entries.Length; i++) entries[i].Refresh();
+    // IsThisRound reports whether the entry's run started with this round rather than an earlier one.
+    bool IsThisRound(RoundEntry@ entry) {
+        return entry.runStartTime >= startTime;
     }
 
-    // RankedResults returns everyone who took part, ranked, with the server's verdict applied to the plugin runner's own result.
-    array<RoundResult@>@ RankedResults(ServerVerdict verdict) {
+    // LocalFinishShown reports whether MLFeed shows the plugin runner finishing this round.
+    bool LocalFinishShown() {
+        return localEntry !is null && IsThisRound(localEntry) && localEntry.result.Finished;
+    }
+
+    // OtherPlayerFinished reports whether MLFeed shows anyone but the plugin runner finishing this round.
+    bool OtherPlayerFinished() {
+        for (uint i = 0; i < entries.Length; i++) {
+            if (entries[i] !is localEntry && IsThisRound(entries[i]) && entries[i].result.Finished) return true;
+        }
+        return false;
+    }
+
+    // RankedResults returns this round's drivers, ranked, with the server's verdict on the plugin runner's finish applied.
+    array<RoundResult@>@ RankedResults() {
         array<RoundResult@> results;
         for (uint i = 0; i < entries.Length; i++) {
             auto entry = entries[i];
+            if (!IsThisRound(entry)) continue;
             RoundResult@ result = entry.result;
-            if (entry is localEntry) {
-                if (verdict == ServerVerdict::Finished && !result.Finished) {
-                    warn("Local finish confirmed by server but no longer shown locally; using the first-seen time " + localFinish.firstSeenFinish.finishTime);
-                }
-                @result = ApplyServerVerdict(result, localFinish.firstSeenFinish, verdict);
+            if (entry is localEntry && localFinishVerdict.rejected) {
+                @result = result.Copy();
+                result.MarkDnf();
             }
-            // Gave up to spectate before finishing.
+            // Switched to spectator before finishing: left out, which ECM counts as a DNF.
             if (entry.spectating && !result.Finished) continue;
             results.InsertLast(result);
         }
@@ -73,131 +115,43 @@ class RoundTracker {
     }
 }
 
-// RoundEntry is one player's run in a round, with its result as last read while that run was current.
-// MLFeed keeps one object per player and stops updating it when the player leaves,
-// so a player who left keeps the last state we read: their finish if the server
-// had relayed it, otherwise a DNF ranked by the checkpoints they reached.
+// RoundEntry is one player's run, as last read from MLFeed.
+// MLFeed keeps one object per player and stops updating it when they leave, so a leaver keeps their
+// last state: a finish if the server relayed it, otherwise a DNF at the checkpoints they reached.
 class RoundEntry {
     const MLFeed::PlayerCpInfo_V4@ player;
     uint runStartTime;
     RoundResult@ result;
     bool spectating = false;
 
-    // RoundEntry starts tracking the player's current run.
+    // RoundEntry starts following the player's current run.
     RoundEntry(const MLFeed::PlayerCpInfo_V4@ player) {
         StartRun(player);
     }
 
-    // StartRun switches to the player's current run.
+    // StartRun switches to the player's current run, which the next ReadResult reads.
     void StartRun(const MLFeed::PlayerCpInfo_V4@ player) {
         @this.player = player;
         runStartTime = player.StartTime;
-        Refresh();
+        @result = null;
     }
 
-    // Refresh re-reads the result while this run is still the player's current one.
-    // Once the player starts another run (the next round) we keep what we last read.
-    void Refresh() {
-        if (player.StartTime != runStartTime) return;
-        @result = RoundResultFromPlayer(player);
-        spectating = player.RequestsSpectate;
+    // get_RunIsCurrent reports whether MLFeed still shows this run as the player's current one.
+    bool get_RunIsCurrent() {
+        return player.StartTime == runStartTime;
     }
-}
 
-// LocalFinishCheck decides whether the server counted the plugin runner's own finish.
-// This client shows its own finish before the server has validated it. With a bad
-// connection the server can still reject it as a timeout, or validate it only after
-// the round has ended here. Other players' finishes only reach this client once the
-// server has validated them, so they need no check.
-class LocalFinishCheck {
-    ServerFinishSignals@ signals;
-    // Wait this long after the first other finish before reading the "not
-    // finished" value, so the server's update has reached this client.
-    uint UnfinishedRoundPointsDelayMs = 500;
-    uint firstOtherFinishAt = 0;
-    // The plugin runner's round points while still racing, read shortly after the
-    // first other finish: the server's "not finished" value for this round (e.g. 0
-    // in Cup, -20 in reverse cup).
-    bool haveUnfinishedRoundPoints = false;
-    int unfinishedRoundPoints = 0;
-    // The plugin runner's result when this client first showed their finish.
-    RoundResult@ firstSeenFinish;
-    // Whether the server confirmed that finish before its end-of-round score commit.
-    bool serverConfirmed = false;
-
-    // Track notes the plugin runner's finish and learns this round's "not finished" value. Call every frame while Active.
-    void Track(RoundEntry@ localEntry, array<RoundEntry@>@ entries) {
-        if (localEntry is null || NoteFinish(localEntry)) return;
-        if (haveUnfinishedRoundPoints) return;
-        if (firstOtherFinishAt == 0) {
-            for (uint i = 0; i < entries.Length; i++) {
-                if (entries[i] is localEntry || !entries[i].result.Finished) continue;
-                firstOtherFinishAt = Time::Now;
-                break;
-            }
+    // ReadResult re-reads the run's result from MLFeed, never moving it backwards; a read with the same checkpoints but corrected times is taken.
+    void ReadResult() {
+        if (!RunIsCurrent) return;
+        RoundResult@ latest = RoundResultFromPlayer(player);
+        // MLFeed can reset a player, or the map can unload, while we wait for the server.
+        if (result !is null && (latest.cpTimes.Length < result.cpTimes.Length || (result.Finished && !latest.Finished))) {
+#if DEV
+            DevTraceIgnoredRead(this, latest);
+#endif
             return;
         }
-        if (Time::Now - firstOtherFinishAt < UnfinishedRoundPointsDelayMs) return;
-        auto score = GetServerScore(localEntry.player);
-        if (score is null) return;
-        unfinishedRoundPoints = score.RoundPoints;
-        haveUnfinishedRoundPoints = true;
+        @result = latest;
     }
-
-    // Watch looks for the server's confirmation of the plugin runner's finish. Call every frame after the round has ended, until the score commit.
-    void Watch(RoundEntry@ localEntry, array<RoundEntry@>@ entries) {
-        if (localEntry is null) return;
-        // The finish can first show up here when it lands on the frame the round ends.
-        NoteFinish(localEntry);
-        // Without the "not finished" value a confirmation can't be told apart.
-        if (!haveUnfinishedRoundPoints) return;
-        LearnSignals(localEntry, entries);
-        if (firstSeenFinish !is null && !serverConfirmed) serverConfirmed = ServerConfirmedFinish(localEntry);
-    }
-
-    // NoteFinish records the plugin runner's result the first time it shows a finish, and reports whether one has been seen.
-    bool NoteFinish(RoundEntry@ localEntry) {
-        if (firstSeenFinish is null && localEntry.result.Finished) @firstSeenFinish = localEntry.result;
-        return firstSeenFinish !is null;
-    }
-
-    // LearnSignals learns how this mode shows a validated finish, from the other finishers' score records.
-    void LearnSignals(RoundEntry@ localEntry, array<RoundEntry@>@ entries) {
-        for (uint i = 0; i < entries.Length; i++) {
-            if (entries[i] is localEntry || !entries[i].result.Finished) continue;
-            auto score = GetServerScore(entries[i].player);
-            if (score is null) continue;
-            if (score.PrevRaceTimes.Length > 0) signals.prevRaceTimes = true;
-            if (score.RoundPoints != unfinishedRoundPoints) signals.roundPoints = true;
-        }
-    }
-
-    // ServerConfirmedFinish reports whether the plugin runner's score record shows the finish. Only meaningful before the score commit.
-    bool ServerConfirmedFinish(RoundEntry@ localEntry) {
-        auto score = GetServerScore(localEntry.player);
-        if (score is null) return false;
-        if (signals.prevRaceTimes && score.PrevRaceTimes.Length > 0) return true;
-        // Not 0 either: that's the commit resetting round points, not a confirmation.
-        return signals.roundPoints && score.RoundPoints != unfinishedRoundPoints && score.RoundPoints != 0;
-    }
-
-    // Verdict returns the server's verdict on the plugin runner's finish, given whether the score commit was seen.
-    ServerVerdict Verdict(bool committed) {
-        if (!committed || firstSeenFinish is null || !haveUnfinishedRoundPoints || !signals.AnySeen) return ServerVerdict::Unknown;
-        return serverConfirmed ? ServerVerdict::Finished : ServerVerdict::Dnf;
-    }
-}
-
-// ApplyServerVerdict returns the plugin runner's result with the server's verdict on their finish applied, leaving its inputs unchanged.
-RoundResult@ ApplyServerVerdict(RoundResult@ shown, RoundResult@ firstSeenFinish, ServerVerdict verdict) {
-    if (verdict == ServerVerdict::Dnf) {
-        RoundResult@ dnf = RoundResult(shown.webServicesUserId, shown.name, shown.finishTime, shown.cpTimes, shown.points);
-        dnf.roundPoints = shown.roundPoints;
-        dnf.MaybeMarkDnf();
-        return dnf;
-    } else if (verdict == ServerVerdict::Finished && !shown.Finished && firstSeenFinish !is null) {
-        // The run as first shown still ends with its finish crossing.
-        return firstSeenFinish;
-    }
-    return shown;
 }

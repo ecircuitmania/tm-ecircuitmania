@@ -1,5 +1,5 @@
 // MakeRoundEndPayload builds the round-end message from the ranked results; finishTime is -1 for a DNF.
-Json::Value@ MakeRoundEndPayload(array<RoundResult@>@ rankedResults, int roundNumber, const string &in mapUid) {
+Json::Value@ MakeRoundEndPayload(array<RoundResult@>@ rankedResults, int roundNumber, const string &in mapUid, int64 timestamp) {
     Json::Value@ payload = Json::Object();
     Json::Value@ playersArray = Json::Array();
     for (uint i = 0; i < rankedResults.Length; i++) {
@@ -12,42 +12,30 @@ Json::Value@ MakeRoundEndPayload(array<RoundResult@>@ rankedResults, int roundNu
     payload["players"] = playersArray;
     payload["roundNum"] = roundNumber;
     payload["mapId"] = mapUid;
-    payload["timestamp"] = Time::Stamp;
+    payload["timestamp"] = timestamp;
     return payload;
 }
 
-// AddOnEndRoundRequest sends a round-end message to ECM.
-ECMResponse@ AddOnEndRoundRequest(const string &in apiKey, const string &in matchId, const string &in payload) {
-    return MakeRequestEcircuit(apiKey, Setting_PlayerRoundFullDataUrl + matchId, payload);
-}
-
-// MakeRequestEcircuit posts a JSON payload to ECM and waits for the response.
-ECMResponse@ MakeRequestEcircuit(const string &in apiKey, const string &in url, const string &in payload) {
+// SendRoundEnd posts a round-end message to ECM and waits for the response.
+ECMResponse@ SendRoundEnd(const string &in apiKey, const string &in matchId, const string &in payload) {
+    string url = Setting_PlayerRoundFullDataUrl + matchId;
 #if DEV
     if (DevDryRun(url, payload)) return ECMResponse(true, 0, "dry run");
 #endif
     Net::HttpRequest@ request = Net::HttpRequest();
     request.Method = Net::HttpMethod::Post;
     request.Url = url;
-    print("Req: " + url);
     request.Body = payload;
-    print("Payload: " + payload);
     request.Headers["Authorization"] = apiKey;
     request.Headers["Content-Type"] = "application/json";
     request.Start();
     while (!request.Finished()) {
         yield();
     }
-    string responseBody = request.String();
     int status = request.ResponseCode();
-    if (status < 200 || status >= 300) {
-        print("Status Code: " + status);
-        print("Error: " + responseBody);
-        return ECMResponse(false, status, responseBody);
-    } else {
-        print("Success: " + responseBody);
-        return ECMResponse(true, status, responseBody);
-    }
+    string responseBody = request.String();
+    print("Round end sent to " + url + ": status " + status + ", response " + responseBody + ", payload " + payload);
+    return ECMResponse(status >= 200 && status < 300, status, responseBody);
 }
 
 // ECMResponse is the outcome of a request to ECM.

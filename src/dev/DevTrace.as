@@ -42,24 +42,80 @@ void DevTraceState(RaceMonitor@ monitor, RaceState previousState, RaceState newS
     DevNotify(tostring(newState) + ", prior: " + tostring(previousState));
 }
 
-// DevTraceRoundReport logs how a round's report was decided, and what was sent.
-void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ round, bool committed, ServerVerdict verdict, array<RoundResult@>@ rankedResults, Json::Value@ payload) {
-    auto traceData = Json::Object();
-    traceData["round"] = round.number;
-    traceData["scoreCommitSeen"] = committed;
-    traceData["stateAfterWait"] = tostring(monitor.currentState);
-    traceData["stillMonitoring"] = g_monitor is monitor;
-    traceData["localVerdict"] = tostring(verdict);
+// DevTraceRoundStart logs a new start time for the round, with the player whose run set it.
+void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::PlayerCpInfo_V4@ player) {
+    auto traceData = DevPlayerJson(player);
+    traceData["round"] = roundTracker.number;
+    traceData["roundStartTime"] = roundTracker.startTime;
+    traceData["previousRoundStartTime"] = roundTracker.previousRoundStartTime;
+    DevTrace("roundStart", traceData);
+}
 
-    auto localFinish = Json::Object();
-    localFinish["firstSeenFinishTime"] = round.localFinish.firstSeenFinish is null ? -1 : round.localFinish.firstSeenFinish.finishTime;
-    localFinish["haveUnfinishedRoundPoints"] = round.localFinish.haveUnfinishedRoundPoints;
-    localFinish["unfinishedRoundPoints"] = round.localFinish.unfinishedRoundPoints;
-    localFinish["serverConfirmed"] = round.localFinish.serverConfirmed;
-    localFinish["roundPointsSignal"] = round.localFinish.signals.roundPoints;
-    localFinish["prevRaceTimesSignal"] = round.localFinish.signals.prevRaceTimes;
-    if (round.localEntry !is null) localFinish["local"] = DevPlayerJson(round.localEntry.player);
-    traceData["localFinish"] = localFinish;
+// DevTraceEndRound logs the round's roster at EndRound, with each player's MLFeed view and server score before the commit.
+void DevTraceEndRound(RoundTracker@ roundTracker) {
+    auto traceData = Json::Object();
+    traceData["round"] = roundTracker.number;
+    traceData["roundStartTime"] = roundTracker.startTime;
+    traceData["previousRoundStartTime"] = roundTracker.previousRoundStartTime;
+    auto roster = Json::Array();
+    for (uint i = 0; i < roundTracker.entries.Length; i++) {
+        auto entry = roundTracker.entries[i];
+        auto entryData = DevPlayerJson(entry.player);
+        entryData["runStartTime"] = entry.runStartTime;
+        entryData["thisRound"] = roundTracker.IsThisRound(entry);
+        entryData["spectatingAtEndRound"] = entry.spectating;
+        roster.Add(entryData);
+    }
+    traceData["roster"] = roster;
+    DevTrace("endRound", traceData);
+}
+
+dictionary devIgnoredReadsLogged;
+
+// DevTraceIgnoredRead logs, once per run, a read of MLFeed that would have moved a result backwards.
+void DevTraceIgnoredRead(RoundEntry@ entry, RoundResult@ ignored) {
+    string key = entry.player.Login + "/" + entry.runStartTime;
+    if (devIgnoredReadsLogged.Exists(key)) return;
+    devIgnoredReadsLogged[key] = true;
+    auto traceData = DevPlayerJson(entry.player);
+    traceData["keptCpCount"] = entry.result.cpTimes.Length;
+    traceData["keptFinishTime"] = entry.result.finishTime;
+    traceData["ignoredCpCount"] = ignored.cpTimes.Length;
+    traceData["ignoredFinishTime"] = ignored.finishTime;
+    DevTrace("ignoredRead", traceData);
+}
+
+// DevTraceRoundReport logs how the round's report was decided, and what was sent.
+void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool scoreCommitSeen, array<RoundResult@>@ rankedResults, Json::Value@ payload) {
+    auto traceData = Json::Object();
+    traceData["round"] = roundTracker.number;
+    traceData["scoreCommitSeen"] = scoreCommitSeen;
+    traceData["stateAfterWait"] = tostring(monitor.currentState);
+    traceData["stillMonitoring"] = raceMonitor is monitor;
+
+    auto verdict = Json::Object();
+    verdict["finishShown"] = roundTracker.LocalFinishShown();
+    verdict["haveSample"] = roundTracker.localFinishVerdict.haveSample;
+    verdict["sampledRoundPoints"] = roundTracker.localFinishVerdict.sampledRoundPoints;
+    verdict["sampledPreviousRaceTimes"] = roundTracker.localFinishVerdict.sampledPreviousRaceTimes;
+    verdict["serverConfirmed"] = roundTracker.localFinishVerdict.serverConfirmed;
+    verdict["rejected"] = roundTracker.localFinishVerdict.rejected;
+    if (roundTracker.localEntry !is null) verdict["local"] = DevPlayerJson(roundTracker.localEntry.player);
+    traceData["localFinish"] = verdict;
+
+    auto roster = Json::Array();
+    for (uint i = 0; i < roundTracker.entries.Length; i++) {
+        auto entry = roundTracker.entries[i];
+        auto entryData = Json::Object();
+        entryData["name"] = entry.player.Name;
+        entryData["runStartTime"] = entry.runStartTime;
+        entryData["thisRound"] = roundTracker.IsThisRound(entry);
+        entryData["spectatingAtEndRound"] = entry.spectating;
+        entryData["cpCount"] = entry.result.cpTimes.Length;
+        entryData["finishTime"] = entry.result.finishTime;
+        roster.Add(entryData);
+    }
+    traceData["roster"] = roster;
 
     auto ranked = Json::Array();
     for (uint i = 0; i < rankedResults.Length; i++) {
@@ -67,7 +123,7 @@ void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ round, bool committ
         rankedEntry["position"] = int(i + 1);
         rankedEntry["name"] = rankedResults[i].name;
         rankedEntry["finishTime"] = rankedResults[i].finishTime;
-        rankedEntry["roundPoints"] = rankedResults[i].roundPoints;
+        rankedEntry["cpCount"] = rankedResults[i].cpTimes.Length;
         ranked.Add(rankedEntry);
     }
     traceData["ranked"] = ranked;
@@ -84,11 +140,7 @@ void DevWatchScores(RaceMonitor@ monitor) {
         auto player = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
         auto score = GetServerScore(player);
         if (score is null) continue;
-        string prevRaceTimes = "";
-        for (uint timeIndex = 0; timeIndex < score.PrevRaceTimes.Length; timeIndex++) {
-            prevRaceTimes += (timeIndex > 0 ? "," : "") + score.PrevRaceTimes[timeIndex];
-        }
-        string summary = "[" + prevRaceTimes + "] roundPoints=" + score.RoundPoints;
+        string summary = "[" + PreviousRaceTimesText(score) + "] roundPoints=" + score.RoundPoints;
         string lastSummary;
         if (devScoresSeen.Get(player.Login, lastSummary) && lastSummary == summary) continue;
         devScoresSeen[player.Login] = summary;
@@ -114,8 +166,8 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ player) {
     traceData["spawnStatus"] = tostring(player.SpawnStatus);
     traceData["startTime"] = player.StartTime;
     traceData["raceRank"] = player.RaceRank;
-    traceData["roundPoints"] = player.RoundPoints;
-    traceData["points"] = player.Points;
+    traceData["mlFeedRoundPoints"] = player.RoundPoints;
+    traceData["mlFeedPoints"] = player.Points;
     traceData["requestsSpectate"] = player.RequestsSpectate;
     auto cpTimes = Json::Array();
     auto feedCpTimes = player.CpTimes;
@@ -129,9 +181,7 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ player) {
     }
     traceData["serverRoundPoints"] = score.RoundPoints;
     traceData["serverPoints"] = score.Points;
-    auto prevRaceTimes = Json::Array();
-    for (uint i = 0; i < score.PrevRaceTimes.Length; i++) prevRaceTimes.Add(score.PrevRaceTimes[i]);
-    traceData["serverPrevRaceTimes"] = prevRaceTimes;
+    traceData["serverPreviousRaceTimes"] = PreviousRaceTimesText(score);
     auto bestRaceTimes = Json::Array();
     for (uint i = 0; i < score.BestRaceTimes.Length; i++) bestRaceTimes.Add(score.BestRaceTimes[i]);
     traceData["serverBestRaceTimes"] = bestRaceTimes;
