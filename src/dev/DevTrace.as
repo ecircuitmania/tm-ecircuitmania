@@ -98,6 +98,8 @@ void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool 
     verdict["haveSample"] = roundTracker.localFinishVerdict.haveSample;
     verdict["sampledRoundPoints"] = roundTracker.localFinishVerdict.sampledRoundPoints;
     verdict["sampledPreviousRaceTimes"] = roundTracker.localFinishVerdict.sampledPreviousRaceTimes;
+    verdict["roundPointsSignal"] = roundTracker.localFinishVerdict.roundPointsSignal;
+    verdict["previousRaceTimesSignal"] = roundTracker.localFinishVerdict.previousRaceTimesSignal;
     verdict["serverConfirmed"] = roundTracker.localFinishVerdict.serverConfirmed;
     verdict["rejected"] = roundTracker.localFinishVerdict.rejected;
     if (roundTracker.localEntry !is null) verdict["local"] = DevPlayerJson(roundTracker.localEntry.player);

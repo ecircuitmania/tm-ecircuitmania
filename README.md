@@ -54,7 +54,10 @@ Every player's result comes from MLFeed, and the server has the final say.
     example because it came after the finish timeout, still shows as one. So if
     you finish after someone else, your finish only counts if the server's
     score record confirms it, through your round points or your previous race
-    times depending on the mode. If it doesn't, you're sent as a DNF.
+    times. The plugin learns which of the two the mode uses from the other
+    finishers' score records. If the server never confirms your finish, you're
+    sent as a DNF. In a mode where the other finishers show neither, the plugin
+    can't tell, and keeps your finish as your game shows it.
 
 ## MLFeed warning
 

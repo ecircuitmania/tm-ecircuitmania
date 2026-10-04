@@ -15,20 +15,34 @@ RoundResult@ TestRoundResult(const string &in webServicesUserId, int finishTime,
 }
 
 // TestRejected returns the verdict on a finish, from the evidence gathered by the end of the wait.
-bool TestRejected(bool scoreCommitSeen, bool finishShown, bool haveSample, bool serverConfirmed) {
+bool TestRejected(bool scoreCommitSeen, bool finishShown, bool haveSample, bool signalSeen, bool serverConfirmed) {
     LocalFinishVerdict verdict;
     verdict.haveSample = haveSample;
+    verdict.roundPointsSignal = signalSeen;
     verdict.serverConfirmed = serverConfirmed;
     verdict.Decide(scoreCommitSeen, finishShown);
     return verdict.rejected;
 }
 
-// TestConfirms reports whether a score record confirms a finish, given the sample taken while the runner was racing.
-bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, int roundPoints, const string &in previousRaceTimes) {
+// TestConfirms reports whether a score record confirms a finish, given the sample and the signals this round showed.
+bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, bool roundPointsSignal, bool previousRaceTimesSignal, int roundPoints, const string &in previousRaceTimes) {
     LocalFinishVerdict verdict;
     verdict.sampledRoundPoints = sampledRoundPoints;
     verdict.sampledPreviousRaceTimes = sampledPreviousRaceTimes;
+    verdict.roundPointsSignal = roundPointsSignal;
+    verdict.previousRaceTimesSignal = previousRaceTimesSignal;
     return verdict.ServerConfirms(roundPoints, previousRaceTimes);
+}
+
+// TestSignals returns the signals one other finisher's score record shows, as "round points", "previous race times" or "".
+string TestSignals(int sampledRoundPoints, int roundPoints, const string &in previousRaceTimesWhileRacing, const string &in previousRaceTimes) {
+    LocalFinishVerdict verdict;
+    verdict.sampledRoundPoints = sampledRoundPoints;
+    verdict.LearnFromFinisher(roundPoints, previousRaceTimesWhileRacing, previousRaceTimes);
+    string signals = "";
+    if (verdict.roundPointsSignal) signals += "round points";
+    if (verdict.previousRaceTimesSignal) signals += "previous race times";
+    return signals;
 }
 
 // RunRoundResultTests checks the ranking and the plugin runner's verdict, and logs any failure.
@@ -95,26 +109,40 @@ void RunRoundResultTests() {
         dnf.MarkDnf();
         if (dnf.Finished || dnf.cpTimes.Length != 1 || !shown.Finished || shown.cpTimes.Length != 2) { failed++; warn("RoundResult test 7 failed: DNF on a copy"); }
     }
-    // 8. The runner's finish is a DNF only when the commit was seen, a sample exists and the server never confirmed it.
+    // 8. The runner's finish is a DNF only when the commit was seen, a sample exists, other finishers showed a signal,
+    //    and the server never confirmed it. Without a signal the server has no say we can read, so the finish stays.
     {
-        bool passed = TestRejected(true, true, true, false)
-            && !TestRejected(true, true, true, true)
-            && !TestRejected(false, true, true, false)
-            && !TestRejected(true, true, false, false)
-            && !TestRejected(true, false, true, false);
+        bool passed = TestRejected(true, true, true, true, false)
+            && !TestRejected(true, true, true, true, true)
+            && !TestRejected(false, true, true, true, false)
+            && !TestRejected(true, true, false, true, false)
+            && !TestRejected(true, false, true, true, false)
+            && !TestRejected(true, true, true, false, false);
         if (!passed) { failed++; warn("RoundResult test 8 failed: local finish verdict"); }
     }
-    // 9. Confirmation: round points moved off the sample and not 0, or PrevRaceTimes changed.
+    // 9. Confirmation, only through a signal this round showed: round points moved off the sample and not 0, or PrevRaceTimes changed.
     {
-        bool passed = TestConfirms(-20, "", -2, "")
-            && TestConfirms(0, "", 6, "")
-            && !TestConfirms(0, "", 0, "")
-            && !TestConfirms(-20, "", 0, "")
-            && !TestConfirms(-20, "", -20, "")
-            && TestConfirms(0, "", 0, "5000,9000")
-            && TestConfirms(0, "4000,8000", 0, "5000,9000")
-            && !TestConfirms(0, "4000,8000", 0, "4000,8000");
+        bool passed = TestConfirms(-20, "", true, false, -2, "")
+            && TestConfirms(0, "", true, false, 6, "")
+            && !TestConfirms(0, "", true, false, 0, "")
+            && !TestConfirms(-20, "", true, false, 0, "")
+            && !TestConfirms(-20, "", true, false, -20, "")
+            && !TestConfirms(-20, "", false, true, -2, "")
+            && TestConfirms(0, "", false, true, 0, "5000,9000")
+            && TestConfirms(0, "4000,8000", false, true, 0, "5000,9000")
+            && !TestConfirms(0, "4000,8000", false, true, 0, "4000,8000")
+            && !TestConfirms(0, "", true, false, 0, "5000,9000");
         if (!passed) { failed++; warn("RoundResult test 9 failed: server confirmation"); }
+    }
+    // 10. Signals from another finisher: round points off the runner's sample, or PrevRaceTimes written since they were racing.
+    //     A mode that only awards points at the commit, or never writes PrevRaceTimes, shows neither.
+    {
+        bool passed = TestSignals(-20, -1, "", "") == "round points"
+            && TestSignals(0, 0, "", "") == ""
+            && TestSignals(0, 0, "4000,8000", "5000,9000") == "previous race times"
+            && TestSignals(0, 0, "4000,8000", "4000,8000") == ""
+            && TestSignals(0, 0, "4000,8000", "") == "";
+        if (!passed) { failed++; warn("RoundResult test 10 failed: finish signals"); }
     }
 
     if (failed == 0) print("RoundResult tests: all passed");
