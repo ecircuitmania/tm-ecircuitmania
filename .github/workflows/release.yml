@@ -25,11 +25,15 @@ jobs:
       
       - name: Check if tag exists
         id: check_tag
+        # Ask the remote: the checkout fetches no tags, so a local lookup never finds one.
+        # ls-remote exits 2 when the tag doesn't exist; any other failure stops the release.
         run: |
-          if git rev-parse "v${{ steps.get_version.outputs.version }}" >/dev/null 2>&1; then
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.get_version.outputs.tag }}" >/dev/null; then
             echo "exists=true" >> $GITHUB_OUTPUT
-          else
+          elif [ $? -eq 2 ]; then
             echo "exists=false" >> $GITHUB_OUTPUT
+          else
+            exit 1
           fi
       
       - name: Create plugin package
