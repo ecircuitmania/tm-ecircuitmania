@@ -21,6 +21,7 @@ class RaceMonitor {
     // The round being raced, from going Active until the next round starts.
     RoundTracker@ roundTracker;
     ServerFinishSignals@ finishSignals;
+    FeedHealthCheck feedHealth;
 
     uint roundEndMessagesSent = 0;
     uint roundEndMessagesSucceeded = 0;
@@ -47,6 +48,7 @@ class RaceMonitor {
             lastActiveAt = Time::Now;
             if (roundTracker !is null) roundTracker.Track(MLFeed::GetRaceData_V4());
         }
+        feedHealth.Update();
 #if DEV
         DevWatchScores(this);
 #endif
@@ -171,6 +173,7 @@ class RaceMonitor {
         UI::AlignTextToFramePadding();
         UI::Text("Running Monitor");
         UI::Separator();
+        feedHealth.DrawBanner();
         DrawCurrentState();
         UI::Separator();
         UI::PushStyleColor(UI::Col::Header, vec4(0.260f, 0.590f, 0.980f, 0.304f) * .5);
