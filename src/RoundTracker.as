@@ -12,16 +12,15 @@
 //     See LocalFinishVerdict.
 
 // RoundTracker follows one round from going Active until its report is sent: who drove in it, and their results.
-// Round-based modes spawn everyone together, so a round's runs share one StartTime: the latest StartTime of a
-// player MLFeed shows driving (spawned, or past a checkpoint) and not spectating. Older runs, such as a
-// spectator's last run, belong to earlier rounds. In modes where players restart on their own, like Time
-// Attack, only the newest run start counts, so other players are left out.
+// A run belongs to the round if it started at or after the round's start as the server's rules give it
+// (MLFeed's Rules_StartTime, read while the round is Active). Earlier runs, such as a spectator's last run,
+// belong to earlier rounds. Nadeo's round modes spawn players with the mode's StartTime, so a round's runs
+// should start exactly then; the roundStart and endRound dev traces log both, to check it.
 class RoundTracker {
     int number;
-    // Runs that started at or before the previous round's start never belong to this round.
-    uint previousRoundStartTime;
-    // This round's start, 0 until a player is seen driving.
-    uint startTime = 0;
+    // The round's Rules_StartTime, -1 until read while the round is Active. A later one means the round was
+    // restarted without an end, so the runs before it no longer count.
+    int startTime = -1;
     string localLogin;
     // Everyone seen driving while the round was Active, with their login IDs in entryLoginIds.
     // Runs later found to be from an earlier round stay listed, and IsThisRound tells them apart.
@@ -33,27 +32,25 @@ class RoundTracker {
     string mapUid;
     int64 timestamp = 0;
 
-    // RoundTracker starts tracking round number, whose runs start after previousRoundStartTime.
-    RoundTracker(int number, uint previousRoundStartTime, const string &in localLogin) {
+    // RoundTracker starts tracking round number for the plugin runner with the given login.
+    RoundTracker(int number, const string &in localLogin) {
         this.number = number;
-        this.previousRoundStartTime = previousRoundStartTime;
         this.localLogin = localLogin;
     }
 
     // WatchRace adds everyone MLFeed shows driving this round and re-reads their results, every frame while the round is Active.
     void WatchRace(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
+        if (raceData.Rules_StartTime > startTime) {
+            startTime = raceData.Rules_StartTime;
+#if DEV
+            DevTraceRoundStart(this, raceData);
+#endif
+        }
         for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
             auto player = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
-            // Only positive evidence of driving counts: spawned, or past a checkpoint, in a run newer than the previous round's.
+            // Only positive evidence of driving counts: spawned, or past a checkpoint, in a run that started with this round.
             bool driving = player.IsSpawned || player.CpCount > 0;
-            if (!driving || player.StartTime <= previousRoundStartTime) continue;
-            if (!player.RequestsSpectate && player.StartTime > startTime) {
-                startTime = player.StartTime;
-#if DEV
-                DevTraceRoundStart(this, player);
-#endif
-            }
-            if (player.StartTime < startTime) continue;
+            if (!driving || !StartedThisRound(player.StartTime)) continue;
             int index = entryLoginIds.Find(player.LoginMwId.Value);
             if (index < 0) {
                 RoundEntry@ entry = RoundEntry(player);
@@ -77,9 +74,15 @@ class RoundTracker {
         for (uint i = 0; i < entries.Length; i++) entries[i].ReadResult();
     }
 
+    // StartedThisRound reports whether a run with this MLFeed StartTime started with this round rather than an earlier one.
+    bool StartedThisRound(uint runStartTime) {
+        // MLFeed stores the game's signed start times as uint, so an unset -1 becomes the largest uint: compare as int.
+        return startTime >= 0 && int(runStartTime) >= startTime;
+    }
+
     // IsThisRound reports whether the entry's run started with this round rather than an earlier one.
     bool IsThisRound(RoundEntry@ entry) {
-        return entry.runStartTime >= startTime;
+        return StartedThisRound(entry.runStartTime);
     }
 
     // LocalFinishShown reports whether MLFeed shows the plugin runner finishing this round.

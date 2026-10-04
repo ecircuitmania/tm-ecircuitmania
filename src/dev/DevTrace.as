@@ -42,32 +42,54 @@ void DevTraceState(RaceMonitor@ monitor, RaceState previousState, RaceState newS
     DevNotify(tostring(newState) + ", prior: " + tostring(previousState));
 }
 
-// DevTraceRoundStart logs a new start time for the round, with the player whose run set it.
-void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::PlayerCpInfo_V4@ player) {
-    auto traceData = DevPlayerJson(player);
+// DevTraceRoundStart logs the round's new Rules_StartTime next to every listed player's StartTime and spawn status.
+void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
+    auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
-    traceData["roundStartTime"] = roundTracker.startTime;
-    traceData["previousRoundStartTime"] = roundTracker.previousRoundStartTime;
+    traceData["rulesStartTime"] = roundTracker.startTime;
+    auto players = Json::Array();
+    for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
+        players.Add(DevRunJson(cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i])));
+    }
+    traceData["players"] = players;
     DevTrace("roundStart", traceData);
 }
 
-// DevTraceEndRound logs the round's roster at EndRound, with each player's MLFeed view and server score before the commit.
+// DevTraceEndRound logs the round's Rules_StartTime next to each roster entry and each listed player left out of the roster, before the commit.
 void DevTraceEndRound(RoundTracker@ roundTracker) {
     auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
-    traceData["roundStartTime"] = roundTracker.startTime;
-    traceData["previousRoundStartTime"] = roundTracker.previousRoundStartTime;
+    traceData["rulesStartTime"] = roundTracker.startTime;
     auto roster = Json::Array();
     for (uint i = 0; i < roundTracker.entries.Length; i++) {
         auto entry = roundTracker.entries[i];
         auto entryData = DevPlayerJson(entry.player);
-        entryData["runStartTime"] = entry.runStartTime;
+        entryData["runStartTime"] = int(entry.runStartTime);
         entryData["thisRound"] = roundTracker.IsThisRound(entry);
         entryData["spectatingAtEndRound"] = entry.spectating;
         roster.Add(entryData);
     }
     traceData["roster"] = roster;
+    // A driver of this round listed here was left out, e.g. because their run started before Rules_StartTime.
+    auto notInRoster = Json::Array();
+    auto raceData = MLFeed::GetRaceData_V4();
+    for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
+        auto player = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
+        if (roundTracker.entryLoginIds.Find(player.LoginMwId.Value) < 0) notInRoster.Add(DevRunJson(player));
+    }
+    traceData["notInRoster"] = notInRoster;
     DevTrace("endRound", traceData);
+}
+
+// DevRunJson describes a player's current run as MLFeed shows it: StartTime, spawn status, checkpoints and spectating.
+Json::Value@ DevRunJson(const MLFeed::PlayerCpInfo_V4@ player) {
+    auto traceData = Json::Object();
+    traceData["name"] = player.Name;
+    traceData["startTime"] = int(player.StartTime);
+    traceData["spawnStatus"] = tostring(player.SpawnStatus);
+    traceData["cpCount"] = player.CpCount;
+    traceData["requestsSpectate"] = player.RequestsSpectate;
+    return traceData;
 }
 
 dictionary devIgnoredReadsLogged;
@@ -89,6 +111,7 @@ void DevTraceIgnoredRead(RoundEntry@ entry, RoundResult@ ignored) {
 void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool scoreCommitSeen, array<RoundResult@>@ rankedResults, Json::Value@ payload) {
     auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
+    traceData["rulesStartTime"] = roundTracker.startTime;
     traceData["scoreCommitSeen"] = scoreCommitSeen;
     traceData["stateAfterWait"] = tostring(monitor.currentState);
     traceData["stillMonitoring"] = raceMonitor is monitor;
@@ -110,7 +133,7 @@ void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool 
         auto entry = roundTracker.entries[i];
         auto entryData = Json::Object();
         entryData["name"] = entry.player.Name;
-        entryData["runStartTime"] = entry.runStartTime;
+        entryData["runStartTime"] = int(entry.runStartTime);
         entryData["thisRound"] = roundTracker.IsThisRound(entry);
         entryData["spectatingAtEndRound"] = entry.spectating;
         entryData["cpCount"] = entry.result.cpTimes.Length;
@@ -166,7 +189,7 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ player) {
     traceData["lastCpTime"] = player.LastCpTime;
     traceData["isFinished"] = player.IsFinished;
     traceData["spawnStatus"] = tostring(player.SpawnStatus);
-    traceData["startTime"] = player.StartTime;
+    traceData["startTime"] = int(player.StartTime);
     traceData["raceRank"] = player.RaceRank;
     traceData["mlFeedRoundPoints"] = player.RoundPoints;
     traceData["mlFeedPoints"] = player.Points;

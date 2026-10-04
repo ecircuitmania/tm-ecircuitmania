@@ -19,8 +19,6 @@ class RaceMonitor {
     int currentRound = 0;
     // The round being raced, from going Active until its end of round.
     RoundTracker@ roundTracker;
-    // When the last ended round's runs started; the next round's runs start later.
-    uint lastRoundStartTime = 0;
     FeedHealthCheck feedHealth;
 
     uint roundEndMessagesSent = 0;
@@ -56,7 +54,6 @@ class RaceMonitor {
     // OnNewMap starts the round count again, dropping a round that never ended on the previous map.
     void OnNewMap() {
         currentRound = 0;
-        lastRoundStartTime = 0;
         @roundTracker = null;
         // Racing on the new map then starts its first round, even if the state was already Active.
         currentState = RaceState::NoMap;
@@ -94,7 +91,7 @@ class RaceMonitor {
         // Racing that stops without an end of round (a warmup starting, or a brief blip) doesn't end the round.
         if (roundTracker !is null) return;
         currentRound++;
-        @roundTracker = RoundTracker(currentRound, lastRoundStartTime, GetLocalLogin());
+        @roundTracker = RoundTracker(currentRound, GetLocalLogin());
     }
 
     // OnEndRound starts the report for the round that just ended.
@@ -102,7 +99,6 @@ class RaceMonitor {
         // Captured now: the report waits for the server, and must not pick up the next map's values.
         roundTracker.mapUid = mapUid;
         roundTracker.timestamp = Time::Stamp;
-        if (roundTracker.startTime > lastRoundStartTime) lastRoundStartTime = roundTracker.startTime;
 #if DEV
         DevTraceEndRound(roundTracker);
 #endif

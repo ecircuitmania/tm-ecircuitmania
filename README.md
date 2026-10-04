@@ -26,9 +26,10 @@ a timestamp, and every player who drove that round:
 - `position`: their place in the round.
 
 Only players with evidence of driving that round are included: seen spawned,
-or past a checkpoint, in the round's run. Spectators are left out, and so is a
-player who switched to spectator before finishing. ECM counts a player missing
-from a round as a DNF.
+or past a checkpoint, in a run that started at or after the round's start as
+the server gives it. Spectators are left out, and so is a player who switched
+to spectator before finishing. ECM counts a player missing from a round as a
+DNF.
 
 Players are ranked like the game does: finishers by race time, then by their
 previous checkpoint times (latest first), then points, then name. DNFs come
