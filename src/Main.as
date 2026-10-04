@@ -10,13 +10,19 @@ const string MenuTitle = MenuIconColor + PluginIcon + "\\$z " + PluginName;
 
 UI::Texture@ logo;
 
+// Main loads the logo and starts the per-frame update loop.
 void Main() {
+#if DEV
+    // This only runs in developer mode, for sanity checking changes. Does not block CI or release.
+    RunRoundResultTests();
+#endif
     yield();
     @logo = UI::LoadTexture("src/logo.png");
-    Meta::StartWithRunContext(Meta::RunContext::AfterScripts, UpdateEarlyCoro);
+    Meta::StartWithRunContext(Meta::RunContext::AfterScripts, UpdateEarlyLoop);
 }
 
-void UpdateEarlyCoro() {
+// UpdateEarlyLoop runs UpdateEarly once per frame, after the game's scripts.
+void UpdateEarlyLoop() {
     while (true) {
         UpdateEarly();
         yield();
@@ -24,37 +30,30 @@ void UpdateEarlyCoro() {
 }
 
 RaceMonitor@ g_monitor;
-bool IsEditor;
-bool IsPgLoaded;
+bool IsPlaygroundLoaded;
 uint lastMapMwId = 0;
 string mapUid;
-bool MapLeftThisFrame = false;
 bool NewMapThisFrame = false;
 
+// UpdateEarly tracks the loaded map and updates the monitor, stopping it when we leave the server.
 void UpdateEarly() {
-    auto app = GetApp();
+    auto game = GetApp();
     if (g_monitor !is null && !IsInServer()) {
         print("On menu, stopping monitoring.");
         @g_monitor = null;
     }
 
-    IsEditor = app.Editor !is null;
-    IsPgLoaded = !IsEditor && app.RootMap !is null && app.CurrentPlayground !is null;
+    IsPlaygroundLoaded = game.Editor is null && game.RootMap !is null && game.CurrentPlayground !is null;
 
-    if (IsPgLoaded) {
-        if (app.RootMap.Id.Value != lastMapMwId) {
-            MapLeftThisFrame = lastMapMwId > 0;
-            lastMapMwId = app.RootMap.Id.Value;
-            mapUid = app.RootMap.MapInfo.MapUid;
+    NewMapThisFrame = false;
+    if (IsPlaygroundLoaded) {
+        if (game.RootMap.Id.Value != lastMapMwId) {
+            lastMapMwId = game.RootMap.Id.Value;
+            mapUid = game.RootMap.MapInfo.MapUid;
             NewMapThisFrame = lastMapMwId > 0;
-        } else {
-            MapLeftThisFrame = false;
-            NewMapThisFrame = false;
         }
     } else {
-        MapLeftThisFrame = lastMapMwId > 0;
         lastMapMwId = 0;
-        NewMapThisFrame = false;
         mapUid = "";
     }
 
@@ -63,25 +62,21 @@ void UpdateEarly() {
     }
 }
 
-uint GetMapIdValue(CGameCtnChallenge@ map) {
-    if (map is null) return 0;
-    return map.Id.Value;
-}
-
+// RenderMenu adds the plugin's window toggle to the Openplanet menu.
 void RenderMenu() {
     if (UI::MenuItem(MenuTitle, "", g_Window)) {
         g_Window = !g_Window;
     }
 }
 
+// RenderInterface draws the plugin window while it is open.
 void RenderInterface() {
     if (!g_Window) return;
-    auto app = GetApp();
     UI::SetNextWindowSize(400, 300, UI::Cond::FirstUseEver);
     if (UI::Begin(PluginName, g_Window)) {
         DrawLogo();
         UI::PushItemWidth(Math::Max(UI::GetContentRegionAvail().x * .3, 100));
-        if (!IsPgLoaded) {
+        if (!IsPlaygroundLoaded) {
             DrawNoMap();
         } else if (g_monitor is null) {
             DrawNoMonitor();
@@ -93,26 +88,23 @@ void RenderInterface() {
     UI::End();
 }
 
+// DrawLogo draws the ECM logo centered at the top of the window.
 void DrawLogo() {
     if (logo is null) {
         UI::Dummy(vec2(0, 60));
     } else {
-        auto w = UI::GetContentRegionAvail().x;
+        auto availableWidth = UI::GetContentRegionAvail().x;
         auto size = vec2(180);
-        auto fullSize = logo.GetSize();
-        size.y = size.x * (fullSize.y / fullSize.x);
-        auto pl = (w - size.x) / 2.;
-        UI::Dummy(vec2(pl, 10));
+        auto logoSize = logo.GetSize();
+        size.y = size.x * (logoSize.y / logoSize.x);
+        auto leftPadding = (availableWidth - size.x) / 2.;
+        UI::Dummy(vec2(leftPadding, 10));
         UI::SameLine();
         UI::Image(logo, size);
     }
 }
 
-void DrawEditApiKey() {
-
-    // S_API_KEY = UI::InputText("API Key", S_API_KEY, UI::InputTextFlags::Password);
-}
-
+// DrawNoMap tells the user no map is loaded, and offers to stop monitoring.
 void DrawNoMap() {
     UI::AlignTextToFramePadding();
     UI::Text("No map loaded.");
@@ -121,6 +113,7 @@ void DrawNoMap() {
     }
 }
 
+// DrawStopMonitoringButton draws a button that stops monitoring.
 void DrawStopMonitoringButton() {
     UI::Separator();
     if (UI::Button("Stop Monitoring")) {
@@ -128,42 +121,43 @@ void DrawStopMonitoringButton() {
     }
 }
 
-string m_matchId_apiKey;
+string matchIdApiKeyInput;
 string matchId;
 string apiKey;
-bool validMIdApiKeyInput = false;
-string midApiKeyError = "Empty Input. Please paste API Key";
-string last_matchId_apiKey;
+bool matchIdApiKeyValid = false;
+string matchIdApiKeyError = "Empty Input. Please paste API Key";
+string lastMatchIdApiKey;
 
+// DrawNoMonitor draws the API key input and the button that starts monitoring.
 void DrawNoMonitor() {
     UI::Text("Not currently monitoring.");
     UI::Separator();
     bool changed;
-    m_matchId_apiKey = UI::InputText("Paste API Key", m_matchId_apiKey, changed, UI::InputTextFlags::Password);
+    matchIdApiKeyInput = UI::InputText("Paste API Key", matchIdApiKeyInput, changed, UI::InputTextFlags::Password);
     bool useLast = false;
-    if (last_matchId_apiKey.Length > 0) {
+    if (lastMatchIdApiKey.Length > 0) {
         UI::SameLine();
         useLast = UI::Button("Use Last");
     }
     if (useLast) {
-        m_matchId_apiKey = last_matchId_apiKey;
+        matchIdApiKeyInput = lastMatchIdApiKey;
         changed = true;
     }
     if (changed) {
-        TryParseMIdApiKey();
+        ParseMatchIdApiKey();
     }
-    if (!validMIdApiKeyInput) {
-        UI::TextWrapped("\\$f80 " + Icons::ExclamationTriangle + "\\$z " + midApiKeyError);
+    if (!matchIdApiKeyValid) {
+        UI::TextWrapped("\\$f80 " + Icons::ExclamationTriangle + "\\$z " + matchIdApiKeyError);
     }
     UI::Separator();
-    UI::BeginDisabled(!validMIdApiKeyInput || !IsInServer());
+    UI::BeginDisabled(!matchIdApiKeyValid || !IsInServer());
     if (UI::Button("Start Monitoring")) {
-        TryParseMIdApiKey();
-        if (validMIdApiKeyInput) {
+        ParseMatchIdApiKey();
+        if (matchIdApiKeyValid) {
             @g_monitor = RaceMonitor(matchId, apiKey);
-            last_matchId_apiKey = m_matchId_apiKey;
-            m_matchId_apiKey = "";
-            TryParseMIdApiKey();
+            lastMatchIdApiKey = matchIdApiKeyInput;
+            matchIdApiKeyInput = "";
+            ParseMatchIdApiKey();
         } else {
             NotifyWarning("Invalid Match ID & API Key input.");
         }
@@ -171,72 +165,41 @@ void DrawNoMonitor() {
     UI::EndDisabled();
 }
 
-void TryParseMIdApiKey() {
-    auto parts = m_matchId_apiKey.Split("_");
+// ParseMatchIdApiKey splits the pasted "<matchId>_<apiKey>" input into matchId and apiKey.
+void ParseMatchIdApiKey() {
+    auto parts = matchIdApiKeyInput.Split("_");
     if (parts.Length == 2) {
         matchId = parts[0];
         apiKey = parts[1];
-        validMIdApiKeyInput = true;
-        midApiKeyError = "";
+        matchIdApiKeyValid = true;
+        matchIdApiKeyError = "";
     } else {
-        validMIdApiKeyInput = false;
-        midApiKeyError = "Invalid input. Expected 1 underscore but found " + (int(parts.Length) - 1);
+        matchIdApiKeyValid = false;
+        matchIdApiKeyError = "Invalid input. Expected 1 underscore but found " + (int(parts.Length) - 1);
     }
 }
 
-
-
-
-
-
-
-
-
-void Notify(const string &in msg) {
-    UI::ShowNotification(Meta::ExecutingPlugin().Name, msg);
-    trace("Notified: " + msg);
-}
-void Dev_Notify(const string &in msg) {
-#if DEV
-    UI::ShowNotification(Meta::ExecutingPlugin().Name, msg);
-    trace("Notified: " + msg);
-#endif
+// NotifySuccess shows a green notification.
+void NotifySuccess(const string &in message) {
+    UI::ShowNotification(Meta::ExecutingPlugin().Name, message, vec4(.4, .7, .1, .3), 10000);
+    trace("Notified: " + message);
 }
 
-void NotifySuccess(const string &in msg) {
-    UI::ShowNotification(Meta::ExecutingPlugin().Name, msg, vec4(.4, .7, .1, .3), 10000);
-    trace("Notified: " + msg);
+// NotifyError logs an error and shows it as a red notification.
+void NotifyError(const string &in message) {
+    warn(message);
+    UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Error", message, vec4(.9, .3, .1, .3), 15000);
 }
 
-void NotifyError(const string &in msg) {
-    warn(msg);
-    UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Error", msg, vec4(.9, .3, .1, .3), 15000);
+// NotifyWarning logs a warning and shows it as an orange notification.
+void NotifyWarning(const string &in message) {
+    warn(message);
+    UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Warning", message, vec4(.9, .6, .2, .3), 15000);
 }
 
-void NotifyWarning(const string &in msg) {
-    warn(msg);
-    UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Warning", msg, vec4(.9, .6, .2, .3), 15000);
-}
-
-dictionary warnDebounce;
-void NotifyWarningDebounce(const string &in msg, uint ms) {
-    warn(msg);
-    bool showWarn = !warnDebounce.Exists(msg) || Time::Now - uint(warnDebounce[msg]) > ms;
-    if (showWarn) {
-        UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Warning", msg, vec4(.9, .6, .2, .3), 15000);
-        warnDebounce[msg] = Time::Now;
-    }
-}
-
+// IsInServer reports whether this client is connected to a server.
 bool IsInServer() {
-    CTrackManiaNetwork@ Network = cast<CTrackManiaNetwork>(GetApp().Network);
-    CGameCtnNetServerInfo@ ServerInfo = cast<CGameCtnNetServerInfo>(Network.ServerInfo);
-    return ServerInfo.JoinLink != "";
-}
-
-
-void dev_warn(const string &in msg) {
-#if DEV
-    warn(msg);
-#endif
+    CTrackManiaNetwork@ network = cast<CTrackManiaNetwork>(GetApp().Network);
+    CGameCtnNetServerInfo@ serverInfo = cast<CGameCtnNetServerInfo>(network.ServerInfo);
+    return serverInfo.JoinLink != "";
 }
