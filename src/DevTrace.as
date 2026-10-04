@@ -1,8 +1,8 @@
 // Dev-only tracing.
 // Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
 //
-// Never shipped: package.sh leaves this file out of release packages, so call
-// anything declared here only from inside an #if DEV block.
+// Never shipped: the release workflow leaves this file out of the package, so
+// call anything declared here only from inside an #if DEV block.
 #if DEV
 
 void DevTrace(const string&in ev, Json::Value@ data) {

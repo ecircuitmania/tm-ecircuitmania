@@ -34,7 +34,11 @@ jobs:
       
       - name: Create plugin package
         if: steps.check_tag.outputs.exists == 'false'
-        run: ./package.sh build/ecircuitmaniadata.op
+        # DevTrace.as is dev-only: every call into it is inside #if DEV.
+        run: |
+          mkdir -p build
+          zip -r build/ecircuitmaniadata.zip src/ vendor/ info.toml -x src/DevTrace.as
+          mv build/ecircuitmaniadata.zip build/ecircuitmaniadata.op
       
       - name: Create Release
         if: steps.check_tag.outputs.exists == 'false'
