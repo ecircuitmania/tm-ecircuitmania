@@ -52,6 +52,16 @@ void RunRoundResultTests() {
         SortRoundResults(r);
         if (r[0].wsid != "x" || r[1].wsid != "y" || r[2].wsid != "z") { failed++; warn("RoundResult test 4 failed: points/name tiebreak"); }
     }
+    // 5. A finish marked DNF ranks by the CPs before it, not with the finish as an extra CP.
+    {
+        auto left = TestRR("left", 20000, "5000,9000,20000", 0);
+        left.MaybeMarkDnf();
+        array<RoundResult@> r;
+        r.InsertLast(left);
+        r.InsertLast(TestRR("dnf", -1, "5000,8000", 0));
+        SortRoundResults(r);
+        if (left.Finished || r[0].wsid != "dnf") { failed++; warn("RoundResult test 5 failed: MaybeMarkDnf"); }
+    }
 
     if (failed == 0) print("RoundResult tests: all passed");
     else warn("RoundResult tests: " + failed + " failed");

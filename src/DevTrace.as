@@ -1,50 +1,42 @@
 // Dev-only tracing.
 // Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
-// Omitted from release builds.
+//
+// Never shipped: the release workflow leaves this file out of the package, so
+// call anything declared here only from inside an #if DEV block.
+#if DEV
 
 void DevTrace(const string&in ev, Json::Value@ data) {
-#if DEV
     data["ev"] = ev;
     data["now"] = Time::Now;
     data["gt"] = MLFeed::GameTime;
     print("[ECMTRACE] " + Json::Write(data));
-#endif
 }
 
-#if DEV
 [Setting category="Dev" name="Dry run (never send HTTP requests)"]
 bool S_DevDryRun = true;
-#endif
 
 // True when the request should be skipped instead of sent to ECM.
 bool DevDryRun(const string&in url, const string&in payload) {
-#if DEV
     if (S_DevDryRun) {
         print("DRY RUN, not sent: " + url);
         print("Payload: " + payload);
         return true;
     }
-#endif
     return false;
 }
 
 void DevTraceState(RaceMonitor@ m, RaceState old, RaceState new) {
-#if DEV
     auto j = DevRaceJson();
     j["from"] = tostring(old);
     j["to"] = tostring(new);
     j["round"] = m.currRound;
     DevTrace("state", j);
-#endif
 }
 
-#if DEV
 dictionary devDetectLogged;
-#endif
 
 // Rejected finishes are re-detected every frame, so each is logged only once.
 void DevTraceDetect(RaceMonitor@ m, const MLFeed::PlayerCpInfo_V4@ player) {
-#if DEV
     string key = player.Login + "/" + m.currRound + "/" + player.StartTime;
     if (devDetectLogged.Exists(key)) return;
     devDetectLogged[key] = true;
@@ -56,42 +48,34 @@ void DevTraceDetect(RaceMonitor@ m, const MLFeed::PlayerCpInfo_V4@ player) {
     j["accepted"] = !alreadyFinished && player.StartTime >= m.activeStartTime && m.currRound != 0;
     j["detectIndex"] = m.finishedPlayers.Length;
     DevTrace("detect", j);
-#endif
 }
 
 void DevTraceEndRound(RaceMonitor@ m, RaceState prior) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     j["prior"] = tostring(prior);
     j["players"] = DevAllPlayersJson();
     DevTrace("endRoundSnapshot", j);
     startnew(DevTraceEndRoundDelayed, m.currRound);
-#endif
 }
 
 void DevTraceRoundEndPayload(RaceMonitor@ m, Json::Value@ payload) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     j["payload"] = payload;
     DevTrace("roundEndPayload", j);
-#endif
 }
 
 void DevTracePlayerFinishSend(RaceMonitor@ m, RoundResult@ result) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     j["name"] = result.name;
     j["finishTime"] = result.finishTime;
     j["roundPoints"] = result.roundPoints;
     DevTrace("playerFinishSend", j);
-#endif
 }
 
 void DevTraceRankedResults(RaceMonitor@ m, array<RoundResult@>@ results) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     auto arr = Json::Array();
@@ -105,10 +89,8 @@ void DevTraceRankedResults(RaceMonitor@ m, array<RoundResult@>@ results) {
     }
     j["ranked"] = arr;
     DevTrace("rankedResults", j);
-#endif
 }
 
-#if DEV
 void DevTraceEndRoundDelayed(int64 round) {
     sleep(3000);
     auto j = Json::Object();
@@ -135,8 +117,6 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ p) {
     auto times = p.CpTimes;
     for (uint i = 0; i < times.Length; i++) cps.Add(times[i]);
     j["cpTimes"] = cps;
-    // Server-written scores table progression (netread Net_TMGame_ScoresTable_RaceProgression)
-    j["raceProg"] = "" + p.RaceProgression.x + "," + p.RaceProgression.y;
     // Server-synced score (what the in-game scoreboard reads)
     auto smp = p.FindCSmPlayer();
     if (smp !is null) {
@@ -187,27 +167,20 @@ Json::Value@ DevRaceJson() {
     }
     return j;
 }
-#endif
 
-#if DEV
 dictionary devScoreSeen;
-#endif
 
 // Dev-only: every frame, log any change to a player's server-synced score
 // (PrevRaceTimes, RoundPoints) with the monitor state at that moment.
 void DevWatchScores(RaceMonitor@ m) {
-#if DEV
     auto rd = MLFeed::GetRaceData_V4();
     for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
         auto p = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
-        auto smp = p.FindCSmPlayer();
-        if (smp is null) continue;
-        auto sp = cast<CSmScriptPlayer>(smp.ScriptAPI);
-        if (sp is null || sp.Score is null) continue;
-        auto sc = sp.Score;
+        auto sc = GetServerScore(p);
+        if (sc is null) continue;
         string prev = "";
         for (uint k = 0; k < sc.PrevRaceTimes.Length; k++) prev += (k > 0 ? "," : "") + sc.PrevRaceTimes[k];
-        string v = "[" + prev + "] rp=" + sc.RoundPoints + " prog=" + p.RaceProgression.x + "," + p.RaceProgression.y;
+        string v = "[" + prev + "] rp=" + sc.RoundPoints;
         string old;
         if (devScoreSeen.Get(p.Login, old) && old == v) continue;
         devScoreSeen[p.Login] = v;
@@ -219,11 +192,9 @@ void DevWatchScores(RaceMonitor@ m) {
         j["mlCpTimes"] = "" + p.CpCount + "@" + p.LastCpTime + (p.IsFinished ? " fin" : "");
         DevTrace("scoreChange", j);
     }
-#endif
 }
 
 void DevTraceLocalGate(RaceMonitor@ m, const string &in outcome, const MLFeed::PlayerCpInfo_V4@ localPlayer, bool confirmed, uint waitedMs) {
-#if DEV
     auto j = Json::Object();
     j["round"] = m.currRound;
     j["outcome"] = outcome;
@@ -235,5 +206,5 @@ void DevTraceLocalGate(RaceMonitor@ m, const string &in outcome, const MLFeed::P
     j["prevRaceSignal"] = m.prevRaceSignalSeen;
     j["local"] = DevPlayerJson(localPlayer);
     DevTrace("localGate", j);
-#endif
 }
+#endif

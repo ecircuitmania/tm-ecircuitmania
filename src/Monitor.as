@@ -9,6 +9,13 @@ enum RaceState {
     Podium
 }
 
+// The server's verdict on the plugin runner's own finish. See ConfirmLocalFinish.
+enum ServerVerdict {
+    // The score commit wasn't seen in time.
+    Unknown,
+    Finished,
+    Dnf
+}
 
 class RaceMonitor {
     uint lastMapMwId = uint(-1);
@@ -18,7 +25,7 @@ class RaceMonitor {
     string matchId;
     string apiKey;
 
-    RaceMonitor(const string &in matchId, const string &in apiKey) {
+    RaceMonitor(const string&in matchId, const string&in apiKey) {
         this.matchId = matchId;
         this.apiKey = apiKey;
     }
@@ -82,7 +89,9 @@ class RaceMonitor {
             UpdateActive();
         }
         feedHealth.Update();
+#if DEV
         DevWatchScores(this);
+#endif
     }
 
     void OnNewMap() {
@@ -105,28 +114,29 @@ class RaceMonitor {
         return RaceState::NoRound_or_Warmup;
     }
 
-
     void UpdateState(RaceState old, RaceState new) {
+#if DEV
         DevTraceState(this, old, new);
+#endif
         currState = new;
-        switch (new) {
-            case RaceState::NoMap: return;
-            case RaceState::NoRound_or_Warmup: {
-                OnWarmup(old);
-                return;
-            }
-            case RaceState::EndRound_or_Similar: {
-                OnEndRound(old);
-                return;
-            }
-            case RaceState::Active: {
-                OnGoingActive(old);
-                return;
-            }
-            case RaceState::Podium: {
-                OnPodium(old);
-                return;
-            }
+        switch(new) {
+        case RaceState::NoMap: return;
+        case RaceState::NoRound_or_Warmup: {
+            OnWarmup(old);
+            return;
+        }
+        case RaceState::EndRound_or_Similar: {
+            OnEndRound(old);
+            return;
+        }
+        case RaceState::Active: {
+            OnGoingActive(old);
+            return;
+        }
+        case RaceState::Podium: {
+            OnPodium(old);
+            return;
+        }
         }
     }
 
@@ -198,7 +208,9 @@ class RaceMonitor {
     }
 
     void AddPlayerFinish(const MLFeed::PlayerCpInfo_V4@ player) {
+#if DEV
         DevTraceDetect(this, player);
+#endif
         if (HasPlayerFinished(player.LoginMwId.Value)) {
             Dev_Notify("Player already finished: " + player.Login);
             return;
@@ -214,15 +226,19 @@ class RaceMonitor {
         }
         finishedPlayers.InsertLast(player);
         finishedPlayerLoginIds.InsertLast(player.LoginMwId.Value);
-        // The per-player message is not sent here. A finish seen mid-round can be
-        // provisional (the local player's own time, before the server confirms it),
-        // so per-player messages are sent at round end from the same results as the
-        // round-end message. See SendOnRoundEnd.
+        // Sent as soon as the finish is seen by this client, without verifying against the server's
+        // view for accuracy. The full round data will be accurate and overwrite the client's view in case
+        // of conflict.
+        auto result = RoundResultFromPlayer(player);
+        result.round = currRound;
+        startnew(CoroutineFuncUserdata(SendPlayerFinish), result);
     }
 
     void SendPlayerFinish(ref@ pref) {
         RoundResult@ result = cast<RoundResult>(pref);
+#if DEV
         DevTracePlayerFinishSend(this, result);
+#endif
         PlayerFinishMsgs_Sent++;
         ECMResponse@ r = AddOnPlayerFinishReq(apiKey, matchId, Json::Write(MakePlayerFinishPayload(result.wsid, result.finishTime, result.round, mapUid)));
         if (r.success) {
@@ -271,7 +287,9 @@ class RaceMonitor {
     }
 
     void OnEndRound(RaceState prior) {
+#if DEV
         DevTraceEndRound(this, prior);
+#endif
         if (prior == RaceState::Active) {
             startnew(CoroutineFunc(SendOnRoundEnd));
         } else {
@@ -283,8 +301,6 @@ class RaceMonitor {
     void OnPodium(RaceState prior) {
         Dev_Notify("OnPodium, prior: " + tostring(prior));
     }
-
-
 
     uint RoundEndMsgs_Sent = 0;
     uint RoundEndMsgs_Succeeded = 0;
@@ -299,25 +315,16 @@ class RaceMonitor {
     string lastError = "";
 
     void SendOnRoundEnd() {
-        // Build the round's results once, then send every message from them,
-        // so per-player and round-end messages always agree.
         // Captured now: waiting for the server below must not pick up the next round's number.
         int round = currRound;
         auto results = BuildRoundResults();
         ConfirmLocalFinish(results);
-        for (uint i = 0; i < results.Length; i++) results[i].round = round;
-
-        // Per-player messages for confirmed finishers, started first so they
-        // go out ahead of the round-end message as before.
-        for (uint i = 0; i < results.Length; i++) {
-            if (!results[i].Finished) continue;
-            startnew(CoroutineFuncUserdata(SendPlayerFinish), results[i]);
-        }
-        yield();
 
         RoundEndMsgs_Sent++;
         auto payload = MakeRoundEndPayloadFromResults(results, round);
+#if DEV
         DevTraceRoundEndPayload(this, payload);
+#endif
         ECMResponse@ r = AddOnEndRoundReq(apiKey, matchId, Json::Write(payload));
         if (r.success) {
             RoundEndMsgs_Succeeded++;
@@ -349,7 +356,10 @@ class RaceMonitor {
             if (player.RequestsSpectate) continue;
             if (player.CpCount == 0) continue;
             if (seen.Find(player.LoginMwId.Value) >= 0) continue;
-            results.InsertLast(RoundResultFromPlayer(player, true));
+            // No longer in the race list, so they left mid-round: never a finish.
+            auto result = RoundResultFromPlayer(player);
+            result.MaybeMarkDnf();
+            results.InsertLast(result);
             seen.InsertLast(player.LoginMwId.Value);
         }
 
@@ -376,77 +386,78 @@ class RaceMonitor {
         // Copied: the next round resets the members while we wait.
         int unfinishedRp = localUnfinishedRoundPoints;
         int provisionalTime = localProvisionalTime;
-        string myLogin = localLogin;
 
-        // Does this mode signal finishes through the score record? Check with the
-        // other finishers, whose results are always server-confirmed.
+        LearnServerSignals(rd, results, localPlayer, unfinishedRp);
+        if (!roundPointsSignalSeen && !prevRaceSignalSeen) {
+#if DEV
+            DevTraceLocalGate(this, "no server signal in this mode, keeping EndRound result", localPlayer, false, 0);
+#endif
+            return;
+        }
+
+        auto verdict = WaitForServerVerdict(rd, localPlayer, unfinishedRp);
+        // No commit seen: keep what we had at EndRound rather than guess.
+        if (verdict == ServerVerdict::Unknown) return;
+        ApplyServerVerdict(results, localPlayer, verdict, provisionalTime);
+    }
+
+    // Does this mode signal finishes through the score record? Learned from the
+    // other finishers, whose results are always server-confirmed.
+    void LearnServerSignals(const MLFeed::HookRaceStatsEventsBase_V4@ rd, array<RoundResult@>@ results, const MLFeed::PlayerCpInfo_V4@ localPlayer, int unfinishedRp) {
         for (uint i = 0; i < results.Length; i++) {
             auto p = FindPlayerByWsid(rd, results[i].wsid);
-            if (p is null || p.Login == myLogin || !results[i].Finished) continue;
+            if (p is null || p.Login == localPlayer.Login || !results[i].Finished) continue;
             auto sc = GetServerScore(p);
             if (sc is null) continue;
             if (sc.PrevRaceTimes.Length > 0) prevRaceSignalSeen = true;
             if (sc.RoundPoints != unfinishedRp) roundPointsSignalSeen = true;
         }
-        if (!roundPointsSignalSeen && !prevRaceSignalSeen) {
-            DevTraceLocalGate(this, "no server signal in this mode, keeping EndRound result", localPlayer, false, 0);
-            return;
-        }
+    }
 
-        // Snapshot totals so we can see the server's score commit.
-        string[] logins;
-        int[] pointsAtEnd;
-        int[] roundPointsAtEnd;
-        for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
-            auto p = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
-            auto sc = GetServerScore(p);
-            if (sc is null) continue;
-            logins.InsertLast(p.Login);
-            pointsAtEnd.InsertLast(sc.Points);
-            roundPointsAtEnd.InsertLast(sc.RoundPoints);
-        }
-
+    // Wait for the server's score commit, watching until then for the server to
+    // confirm the plugin runner's finish. Gives up after ScoreCommitTimeoutMs, or
+    // once the round state moves on.
+    ServerVerdict WaitForServerVerdict(const MLFeed::HookRaceStatsEventsBase_V4@ rd, const MLFeed::PlayerCpInfo_V4@ localPlayer, int unfinishedRp) {
+        ScoreCommitWatch@ commit = ScoreCommitWatch(rd);
         bool confirmed = false;
-        bool committed = false;
         uint start = Time::Now;
         while (true) {
-            // Stop at the server's commit, before reading this frame's values:
-            // the commit resets round points, which must not count as a confirmation.
-            for (uint i = 0; i < logins.Length && !committed; i++) {
-                auto p = FindPlayerByLogin(rd, logins[i]);
-                auto sc = GetServerScore(p);
-                if (sc is null) continue;
-                if (sc.Points != pointsAtEnd[i]) committed = true;
-                else if (roundPointsAtEnd[i] != 0 && sc.RoundPoints == 0) committed = true;
+            // Checked before this frame's confirmation: the commit resets round points.
+            if (commit.Committed()) {
+#if DEV
+                DevTraceLocalGate(this, "score commit", localPlayer, confirmed, Time::Now - start);
+#endif
+                return confirmed ? ServerVerdict::Finished : ServerVerdict::Dnf;
             }
-            if (committed) break;
-
-            auto lsc = GetServerScore(localPlayer);
-            if (lsc !is null && !confirmed) {
-                if (prevRaceSignalSeen && lsc.PrevRaceTimes.Length > 0) confirmed = true;
-                if (roundPointsSignalSeen && lsc.RoundPoints != unfinishedRp && lsc.RoundPoints != 0) confirmed = true;
-            }
+            if (!confirmed) confirmed = ServerConfirmedFinish(localPlayer, unfinishedRp);
             if (Time::Now - start > ScoreCommitTimeoutMs) break;
             if (currState != RaceState::EndRound_or_Similar) break;
             yield();
         }
+#if DEV
+        DevTraceLocalGate(this, "stopped before commit", localPlayer, confirmed, Time::Now - start);
+#endif
+        return ServerVerdict::Unknown;
+    }
 
-        DevTraceLocalGate(this, committed ? "score commit" : "stopped before commit", localPlayer, confirmed, Time::Now - start);
-        if (!committed) {
-            // No commit seen: keep what we had at EndRound rather than guess.
-            return;
-        }
+    // Has the server confirmed the plugin runner's finish? Only meaningful before
+    // the score commit.
+    bool ServerConfirmedFinish(const MLFeed::PlayerCpInfo_V4@ localPlayer, int unfinishedRp) {
+        auto sc = GetServerScore(localPlayer);
+        if (sc is null) return false;
+        if (prevRaceSignalSeen && sc.PrevRaceTimes.Length > 0) return true;
+        // Not 0 either: that's the commit resetting round points, not a confirmation.
+        return roundPointsSignalSeen && sc.RoundPoints != unfinishedRp && sc.RoundPoints != 0;
+    }
 
-        // Replace the plugin runner's entry with the server's verdict.
-        RoundResult@ updated;
-        if (confirmed) {
-            @updated = RoundResultFromPlayer(localPlayer);
-            if (!updated.Finished) {
-                warn("Local finish confirmed by server but not yet shown locally; using the first-seen time " + provisionalTime);
-                updated.finishTime = provisionalTime;
-            }
-        } else {
-            @updated = RoundResultFromPlayer(localPlayer, true);
+    // Replace the plugin runner's EndRound entry with the server's verdict.
+    void ApplyServerVerdict(array<RoundResult@>@ results, const MLFeed::PlayerCpInfo_V4@ localPlayer, ServerVerdict verdict, int provisionalTime) {
+        RoundResult@ updated = RoundResultFromPlayer(localPlayer);
+        if (verdict == ServerVerdict::Dnf) {
+            updated.MaybeMarkDnf();
+        } else if (!updated.Finished) {
+            warn("Local finish confirmed by server but not yet shown locally; using the first-seen time " + provisionalTime);
+            updated.finishTime = provisionalTime;
         }
         bool replaced = false;
         for (uint i = 0; i < results.Length; i++) {
@@ -456,19 +467,11 @@ class RaceMonitor {
                 break;
             }
         }
-        if (!replaced && confirmed) results.InsertLast(updated);
+        if (!replaced && verdict == ServerVerdict::Finished) results.InsertLast(updated);
         SortRoundResults(results);
     }
 
-    const MLFeed::PlayerCpInfo_V4@ FindPlayerByLogin(const MLFeed::HookRaceStatsEventsBase_V4@ rd, const string &in login) {
-        for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
-            auto player = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
-            if (player.Login == login) return player;
-        }
-        return null;
-    }
-
-    const MLFeed::PlayerCpInfo_V4@ FindPlayerByWsid(const MLFeed::HookRaceStatsEventsBase_V4@ rd, const string &in wsid) {
+    const MLFeed::PlayerCpInfo_V4@ FindPlayerByWsid(const MLFeed::HookRaceStatsEventsBase_V4@ rd, const string&in wsid) {
         for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
             auto player = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
             if (player.WebServicesUserId == wsid) return player;
@@ -481,10 +484,11 @@ class RaceMonitor {
         for (uint i = 0; i < results.Length; i++) {
             players.InsertLast(PlayerFinishData(results[i].wsid, results[i].finishTime, i + 1));
         }
+#if DEV
         DevTraceRankedResults(this, results);
+#endif
         return MakeRoundEndPayload(players, round, mapUid);
     }
-
 
     void DrawWindowInner() {
         UI::AlignTextToFramePadding();
@@ -522,14 +526,55 @@ class RaceMonitor {
     }
 }
 
-
 uint GetMapMwIdValue() {
     auto map = GetApp().RootMap;
     if (map is null) return 0xFFFFFFFF;
     return map.Id.Value;
 }
 
+// The player's score record, copied from the server to every client. Its
+// RoundPoints and PrevRaceTimes are written by the server's game mode, so they
+// reflect what the server decided, not this client's prediction.
+CSmArenaScore@ GetServerScore(const MLFeed::PlayerCpInfo_V4@ player) {
+    if (player is null) return null;
+    auto smp = player.FindCSmPlayer();
+    if (smp is null) return null;
+    auto sp = cast<CSmScriptPlayer>(smp.ScriptAPI);
+    if (sp is null) return null;
+    return sp.Score;
+}
 
+// Every player's server totals at EndRound, to spot the server's end-of-round
+// score commit: round points folded into totals, about 3 s after EndRound.
+class ScoreCommitWatch {
+    // MLFeed keeps one object per player, and FindCSmPlayer looks the player up
+    // each time, so these handles stay valid to read from.
+    array<const MLFeed::PlayerCpInfo_V4@> players;
+    int[] pointsAtEnd;
+    int[] roundPointsAtEnd;
+
+    ScoreCommitWatch(const MLFeed::HookRaceStatsEventsBase_V4@ rd) {
+        for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
+            auto p = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
+            auto sc = GetServerScore(p);
+            if (sc is null) continue;
+            players.InsertLast(p);
+            pointsAtEnd.InsertLast(sc.Points);
+            roundPointsAtEnd.InsertLast(sc.RoundPoints);
+        }
+    }
+
+    // The commit changes someone's total, or resets their round points to 0.
+    bool Committed() {
+        for (uint i = 0; i < players.Length; i++) {
+            auto sc = GetServerScore(players[i]);
+            if (sc is null) continue;
+            if (sc.Points != pointsAtEnd[i]) return true;
+            if (roundPointsAtEnd[i] != 0 && sc.RoundPoints == 0) return true;
+        }
+        return false;
+    }
+}
 
 bool IsPlayingUISeq(int seq) {
     return seq == int(CGamePlaygroundUIConfig::EUISequence::Playing)
