@@ -26,18 +26,22 @@ a timestamp, and every player who drove that round:
 - `position`: their place in the round.
 
 Only players with evidence of driving that round are included: seen spawned,
-or past a checkpoint, in a run that started at or after the round's start as
-the server gives it. Spectators are left out, and so is a player who switched
-to spectator before finishing. ECM counts a player missing from a round as a
-DNF.
+or past a checkpoint, in a run that started at or after both the round's start
+as the server gives it and the map's previous end of round. Spectators are left
+out, and so is a player who switched to spectator before finishing. ECM counts
+a player missing from a round as a DNF. If players drove in a round but none of
+their runs counts for it, the round isn't sent, since ECM would count them all
+as DNFs; an error notification says so instead.
 
 Players are ranked like the game does: finishers by race time, then by their
 previous checkpoint times (latest first), then points, then name. DNFs come
 after them, by checkpoints reached, then time at the last checkpoint; a player
 who never reached a checkpoint ranks last.
 
-Rounds are numbered by the plugin from the start of each map, so starting to
-monitor mid-match numbers rounds from that point. Warmup is never reported.
+Rounds are numbered by the plugin, counting from the start of each map. The
+count survives restarting monitoring (as the MLFeed warning asks you to), but
+rounds that end while monitoring is stopped aren't counted, and starting to
+monitor mid-map counts from that point. Warmup is never reported.
 
 ## How results are built
 
@@ -53,12 +57,14 @@ Every player's result comes from MLFeed, and the server has the final say.
     time is the one sent.
   - Your **finish** is never corrected: a finish the server rejected, for
     example because it came after the finish timeout, still shows as one. So if
-    you finish after someone else, your finish only counts if the server's
-    score record confirms it, through your round points or your previous race
-    times. The plugin learns which of the two the mode uses from the other
-    finishers' score records. If the server never confirms your finish, you're
-    sent as a DNF. In a mode where the other finishers show neither, the plugin
-    can't tell, and keeps your finish as your game shows it.
+    you finish more than half a second after the first other player, your
+    finish only counts if the server's score record confirms it, through your
+    round points or your previous race times, before the server commits the
+    round's scores. The plugin learns which of the two the mode uses from the
+    other finishers' score records. If the server never confirms your finish,
+    you're sent as a DNF. When the plugin can't tell, it keeps your finish as
+    your game shows it: in a mode where the other finishers show neither, or in
+    a mode without round points, where the score commit can't be seen.
 
 ## MLFeed warning
 

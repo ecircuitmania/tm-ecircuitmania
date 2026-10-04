@@ -37,7 +37,7 @@ void DevTraceState(RaceMonitor@ monitor, RaceState previousState, RaceState newS
     auto traceData = DevRaceJson();
     traceData["from"] = tostring(previousState);
     traceData["to"] = tostring(newState);
-    traceData["round"] = monitor.currentRound;
+    traceData["roundsEnded"] = mapRoundsEnded;
     DevTrace("state", traceData);
     DevNotify(tostring(newState) + ", prior: " + tostring(previousState));
 }
@@ -45,8 +45,9 @@ void DevTraceState(RaceMonitor@ monitor, RaceState previousState, RaceState newS
 // DevTraceRoundStart logs the round's new Rules_StartTime next to every listed player's StartTime and spawn status.
 void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
     auto traceData = Json::Object();
-    traceData["round"] = roundTracker.number;
+    traceData["roundsEnded"] = mapRoundsEnded;
     traceData["rulesStartTime"] = roundTracker.startTime;
+    traceData["previousEndRoundTime"] = roundTracker.previousEndRoundTime;
     auto players = Json::Array();
     for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
         players.Add(DevRunJson(cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i])));
@@ -60,6 +61,9 @@ void DevTraceEndRound(RoundTracker@ roundTracker) {
     auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
     traceData["rulesStartTime"] = roundTracker.startTime;
+    traceData["previousEndRoundTime"] = roundTracker.previousEndRoundTime;
+    traceData["driverSeen"] = roundTracker.driverSeen;
+    traceData["driversLeftOut"] = roundTracker.DriversLeftOut();
     auto roster = Json::Array();
     for (uint i = 0; i < roundTracker.entries.Length; i++) {
         auto entry = roundTracker.entries[i];
@@ -90,6 +94,15 @@ Json::Value@ DevRunJson(const MLFeed::PlayerCpInfo_V4@ player) {
     traceData["cpCount"] = player.CpCount;
     traceData["requestsSpectate"] = player.RequestsSpectate;
     return traceData;
+}
+
+// DevTraceRoundDropped logs a round in progress that was dropped without being reported, and why.
+void DevTraceRoundDropped(RoundTracker@ roundTracker, const string &in reason) {
+    auto traceData = Json::Object();
+    traceData["roundsEnded"] = mapRoundsEnded;
+    traceData["rulesStartTime"] = roundTracker.startTime;
+    traceData["reason"] = reason;
+    DevTrace("roundDropped", traceData);
 }
 
 dictionary devIgnoredReadsLogged;
@@ -170,7 +183,7 @@ void DevWatchScores(RaceMonitor@ monitor) {
         if (devScoresSeen.Get(player.Login, lastSummary) && lastSummary == summary) continue;
         devScoresSeen[player.Login] = summary;
         auto traceData = Json::Object();
-        traceData["round"] = monitor.currentRound;
+        traceData["roundsEnded"] = mapRoundsEnded;
         traceData["state"] = tostring(monitor.currentState);
         traceData["name"] = player.Name;
         traceData["score"] = summary;

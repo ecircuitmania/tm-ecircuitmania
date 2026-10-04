@@ -56,6 +56,8 @@ void UpdateEarly() {
         lastMapMwId = 0;
         mapUid = "";
     }
+    // Done with or without a monitor, so the map's round count survives restarting monitoring.
+    if (NewMapThisFrame) ResetMapRounds();
 
     if (raceMonitor !is null) {
         raceMonitor.Update();

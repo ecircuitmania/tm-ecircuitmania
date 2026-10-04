@@ -15,9 +15,10 @@
 // finishes in the score record; without one the server has no say we can read.
 //
 // A runner who finishes first or alone can't have been timed out: the finish timeout only starts
-// after the first validated finish. Known limitation: in a mode that doesn't fill PrevRaceTimes and
+// after the first validated finish. Known limitations: in a mode that doesn't fill PrevRaceTimes and
 // gives some finishers the same round points as non-finishers, a late runner finish that scores that
-// value is sent as a DNF.
+// value is sent as a DNF; and in a mode that changes non-finishers' round points before the commit,
+// a rejected runner finish is counted.
 class LocalFinishVerdict {
     // Wait this long after the first other finish before sampling, so the server's update has reached this client.
     uint SampleDelayMs = 500;

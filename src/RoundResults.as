@@ -42,7 +42,8 @@ RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
     auto feedCpTimes = player.CpTimes;
     // MLFeed's CpTimes has a leading 0 for the start.
     for (uint i = 1; i < feedCpTimes.Length; i++) cpTimes.InsertLast(feedCpTimes[i]);
-    int finishTime = player.IsFinished ? player.LastCpTime : -1;
+    // MLFeed's IsFinished compares against the map's checkpoint count, which it zeroes when the map unloads.
+    int finishTime = (player.IsFinished && player.CpCount > 0) ? player.LastCpTime : -1;
     return RoundResult(player.WebServicesUserId, player.Name, finishTime, cpTimes, player.Points);
 }
 

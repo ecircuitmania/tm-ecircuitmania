@@ -45,7 +45,7 @@ string TestSignals(int sampledRoundPoints, int roundPoints, const string &in pre
     return signals;
 }
 
-// RunRoundResultTests checks the ranking and the plugin runner's verdict, and logs any failure.
+// RunRoundResultTests checks the ranking, which runs count for a round and the plugin runner's verdict, and logs any failure.
 void RunRoundResultTests() {
     uint failed = 0;
 
@@ -143,6 +143,36 @@ void RunRoundResultTests() {
             && TestSignals(0, 0, "4000,8000", "4000,8000") == ""
             && TestSignals(0, 0, "4000,8000", "") == "";
         if (!passed) { failed++; warn("RoundResult test 10 failed: finish signals"); }
+    }
+    // 11. A run counts for the round only if it started at or after both Rules_StartTime and the map's previous end of round,
+    //     whatever the mode does with Rules_StartTime.
+    {
+        RoundTracker@ tracker = RoundTracker(30000, "");
+        bool passed = !tracker.StartedThisRound(60000);
+        // A mode that sets Rules_StartTime once per map: last round's runs stay out, this round's count.
+        tracker.startTime = 1000;
+        passed = passed && !tracker.StartedThisRound(2000) && tracker.StartedThisRound(60000) && !tracker.StartedThisRound(uint(-1));
+        // A mode whose Rules_StartTime comes after its spawns: nothing counts.
+        tracker.startTime = 60001;
+        passed = passed && !tracker.StartedThisRound(60000) && tracker.StartedThisRound(60001);
+        if (!passed) { failed++; warn("RoundResult test 11 failed: runs counted for the round"); }
+    }
+    // 12. Drivers seen with no run counting for the round means the round isn't sent; nobody driving still sends an empty round.
+    {
+        RoundTracker@ tracker = RoundTracker(0, "");
+        bool passed = !tracker.DriversLeftOut();
+        tracker.driverSeen = true;
+        passed = passed && tracker.DriversLeftOut();
+        if (!passed) { failed++; warn("RoundResult test 12 failed: drivers left out"); }
+    }
+    // 13. Re-reads only move a run forward: fewer checkpoints or a finish no longer counted are ignored, a corrected time is taken.
+    {
+        auto finished = TestRoundResult("p", 20000, "5000,20000", 0);
+        bool passed = MovesBackwards(finished, TestRoundResult("p", -1, "5000,20000", 0))
+            && MovesBackwards(finished, TestRoundResult("p", -1, "5000", 0))
+            && !MovesBackwards(finished, TestRoundResult("p", 20130, "5000,20130", 0))
+            && !MovesBackwards(TestRoundResult("p", -1, "5000", 0), TestRoundResult("p", -1, "5000,9000", 0));
+        if (!passed) { failed++; warn("RoundResult test 13 failed: forward-only reads"); }
     }
 
     if (failed == 0) print("RoundResult tests: all passed");

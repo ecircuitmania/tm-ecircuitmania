@@ -9,32 +9,39 @@
 //   - The finish itself is never corrected: a finish the server rejected still
 //     shows as one. It only counts if the server's score record (CSmArenaScore)
 //     confirms it, through PrevRaceTimes or RoundPoints depending on the mode.
-//     See LocalFinishVerdict.
+//     The score commit is spotted by round points being folded into the totals, so
+//     in a mode without round points no commit is seen and the runner's finish is
+//     always kept. See LocalFinishVerdict.
 
 // RoundTracker follows one round from going Active until its report is sent: who drove in it, and their results.
-// A run belongs to the round if it started at or after the round's start as the server's rules give it
-// (MLFeed's Rules_StartTime, read while the round is Active). Earlier runs, such as a spectator's last run,
-// belong to earlier rounds. Nadeo's round modes spawn players with the mode's StartTime, so a round's runs
-// should start exactly then; the roundStart and endRound dev traces log both, to check it.
+// A run belongs to the round if it started at or after both the round's start as the server's rules give it
+// (MLFeed's Rules_StartTime, read while the round is Active) and the map's previous end of round, which holds
+// whatever the mode does with Rules_StartTime. Earlier runs, such as a spectator's last run, belong to earlier
+// rounds. Nadeo's round modes spawn players with the mode's StartTime, so a round's runs should start exactly at
+// Rules_StartTime; the roundStart and endRound dev traces log both, to check it.
 class RoundTracker {
-    int number;
+    // Set at EndRound, for the report: the round's number on this map, the map, and when it ended.
+    int number = 0;
+    string mapUid;
+    int64 timestamp = 0;
+    // MLFeed::GameTime at the map's previous end of round, 0 if none was seen.
+    int previousEndRoundTime;
     // The round's Rules_StartTime, -1 until read while the round is Active. A later one means the round was
     // restarted without an end, so the runs before it no longer count.
     int startTime = -1;
+    // Whether MLFeed showed anyone spawned, since the previous end of round, while the round was Active.
+    bool driverSeen = false;
     string localLogin;
-    // Everyone seen driving while the round was Active, with their login IDs in entryLoginIds.
+    // Everyone seen driving this round while it was Active, with their login IDs in entryLoginIds.
     // Runs later found to be from an earlier round stay listed, and IsThisRound tells them apart.
     array<RoundEntry@> entries;
     uint[] entryLoginIds;
     RoundEntry@ localEntry;
     LocalFinishVerdict localFinishVerdict;
-    // Set at EndRound, for the report.
-    string mapUid;
-    int64 timestamp = 0;
 
-    // RoundTracker starts tracking round number for the plugin runner with the given login.
-    RoundTracker(int number, const string &in localLogin) {
-        this.number = number;
+    // RoundTracker starts tracking a round on a map whose previous end of round was at previousEndRoundTime.
+    RoundTracker(int previousEndRoundTime, const string &in localLogin) {
+        this.previousEndRoundTime = previousEndRoundTime;
         this.localLogin = localLogin;
     }
 
@@ -48,19 +55,23 @@ class RoundTracker {
         }
         for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
             auto player = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
+            if (player.IsSpawned && int(player.StartTime) >= previousEndRoundTime) driverSeen = true;
             // Only positive evidence of driving counts: spawned, or past a checkpoint, in a run that started with this round.
             bool driving = player.IsSpawned || player.CpCount > 0;
             if (!driving || !StartedThisRound(player.StartTime)) continue;
             int index = entryLoginIds.Find(player.LoginMwId.Value);
             if (index < 0) {
-                RoundEntry@ entry = RoundEntry(player);
-                entries.InsertLast(entry);
+                RoundEntry@ newEntry = RoundEntry(player);
+                entries.InsertLast(newEntry);
                 entryLoginIds.InsertLast(player.LoginMwId.Value);
-                if (player.Login == localLogin) @localEntry = entry;
-            } else if (entries[uint(index)].player !is player || entries[uint(index)].runStartTime != player.StartTime) {
-                // A rejoin gets a new MLFeed object, and a round restarted without an end gets new runs.
-                entries[uint(index)].StartRun(player);
+                if (player.Login == localLogin) @localEntry = newEntry;
+                continue;
             }
+            auto entry = entries[uint(index)];
+            // A rejoin gets a new MLFeed object, and a round restarted without an end gets new runs.
+            // A finish in this round is kept, even if the mode lets the player drive again before the end of round.
+            bool newRun = entry.player !is player || entry.runStartTime != player.StartTime;
+            if (newRun && !(IsThisRound(entry) && entry.result.Finished)) entry.StartRun(player);
         }
         for (uint i = 0; i < entries.Length; i++) {
             entries[i].ReadResult();
@@ -77,12 +88,22 @@ class RoundTracker {
     // StartedThisRound reports whether a run with this MLFeed StartTime started with this round rather than an earlier one.
     bool StartedThisRound(uint runStartTime) {
         // MLFeed stores the game's signed start times as uint, so an unset -1 becomes the largest uint: compare as int.
-        return startTime >= 0 && int(runStartTime) >= startTime;
+        int runStart = int(runStartTime);
+        return startTime >= 0 && runStart >= startTime && runStart >= previousEndRoundTime;
     }
 
     // IsThisRound reports whether the entry's run started with this round rather than an earlier one.
     bool IsThisRound(RoundEntry@ entry) {
         return StartedThisRound(entry.runStartTime);
+    }
+
+    // DriversLeftOut reports whether players drove this round but none of their runs counts for it, as when a mode's Rules_StartTime comes after its spawns.
+    bool DriversLeftOut() {
+        if (!driverSeen) return false;
+        for (uint i = 0; i < entries.Length; i++) {
+            if (IsThisRound(entries[i])) return false;
+        }
+        return true;
     }
 
     // LocalFinishShown reports whether MLFeed shows the plugin runner finishing this round.
@@ -148,8 +169,7 @@ class RoundEntry {
     void ReadResult() {
         if (!RunIsCurrent) return;
         RoundResult@ latest = RoundResultFromPlayer(player);
-        // MLFeed can reset a player, or the map can unload, while we wait for the server.
-        if (result !is null && (latest.cpTimes.Length < result.cpTimes.Length || (result.Finished && !latest.Finished))) {
+        if (result !is null && MovesBackwards(result, latest)) {
 #if DEV
             DevTraceIgnoredRead(this, latest);
 #endif
@@ -157,4 +177,10 @@ class RoundEntry {
         }
         @result = latest;
     }
+}
+
+// MovesBackwards reports whether a newer read of the same run undoes progress: fewer checkpoints, or a finish no longer counted.
+// MLFeed's IsFinished depends on the map's checkpoint and lap counts, which it can change under a run already read.
+bool MovesBackwards(const RoundResult@ kept, const RoundResult@ latest) {
+    return latest.cpTimes.Length < kept.cpTimes.Length || (kept.Finished && !latest.Finished);
 }

@@ -10,14 +10,25 @@ enum RaceState {
     Podium
 }
 
+// The current map's rounds, kept outside the monitor so that restarting monitoring (as the MLFeed warning asks)
+// doesn't renumber them and make ECM overwrite earlier rounds. Reset only on a new map; rounds that end while
+// monitoring is stopped aren't counted.
+int mapRoundsEnded = 0;
+// MLFeed::GameTime at the map's last end of round seen while monitoring, 0 before the first.
+int mapLastEndRoundTime = 0;
+
+// ResetMapRounds starts the round count again, for a new map.
+void ResetMapRounds() {
+    mapRoundsEnded = 0;
+    mapLastEndRoundTime = 0;
+}
+
 // RaceMonitor follows the race on the current server and sends each round's results to ECM.
 class RaceMonitor {
     string matchId;
     string apiKey;
     RaceState currentState = RaceState::NoMap;
-    // Rounds started on this map; the round being raced has this number.
-    int currentRound = 0;
-    // The round being raced, from going Active until its end of round.
+    // The round in progress, from going Active until its end of round.
     RoundTracker@ roundTracker;
     FeedHealthCheck feedHealth;
 
@@ -34,15 +45,23 @@ class RaceMonitor {
         this.apiKey = apiKey;
     }
 
-    // Update follows the race state, tracks the round being raced and checks MLFeed's health, every frame while monitoring.
+    // Update follows the race state, tracks the round in progress and checks MLFeed's health, every frame while monitoring.
     void Update() {
         if (NewMapThisFrame) OnNewMap();
         auto newState = CalculateState();
         if (newState != currentState) {
             UpdateState(currentState, newState);
         }
+        auto raceData = MLFeed::GetRaceData_V4();
+        // A warmup starting means the round in progress will never end, so it's dropped.
+        if (raceData.WarmupActive && roundTracker !is null) {
+#if DEV
+            DevTraceRoundDropped(roundTracker, "warmup started");
+#endif
+            @roundTracker = null;
+        }
         if (currentState == RaceState::Active) {
-            roundTracker.WatchRace(MLFeed::GetRaceData_V4());
+            roundTracker.WatchRace(raceData);
             roundTracker.localFinishVerdict.WatchRace(roundTracker);
         }
         feedHealth.Update();
@@ -51,9 +70,8 @@ class RaceMonitor {
 #endif
     }
 
-    // OnNewMap starts the round count again, dropping a round that never ended on the previous map.
+    // OnNewMap drops a round that never ended on the previous map; UpdateEarly has already reset the map's round count.
     void OnNewMap() {
-        currentRound = 0;
         @roundTracker = null;
         // Racing on the new map then starts its first round, even if the state was already Active.
         currentState = RaceState::NoMap;
@@ -83,22 +101,26 @@ class RaceMonitor {
 #endif
         currentState = newState;
         if (newState == RaceState::Active) OnGoingActive();
-        if (newState == RaceState::EndRound_or_Similar && previousState == RaceState::Active) OnEndRound();
+        // Even if racing stopped before the end of round: a warmup or a new map would have dropped the round.
+        if (newState == RaceState::EndRound_or_Similar && roundTracker !is null) OnEndRound();
     }
 
     // OnGoingActive starts a new round, unless racing resumes in a round that hasn't ended.
     void OnGoingActive() {
-        // Racing that stops without an end of round (a warmup starting, or a brief blip) doesn't end the round.
+        // Racing that stops without an end of round, such as a brief blip, doesn't end the round.
         if (roundTracker !is null) return;
-        currentRound++;
-        @roundTracker = RoundTracker(currentRound, GetLocalLogin());
+        @roundTracker = RoundTracker(mapLastEndRoundTime, GetLocalLogin());
     }
 
-    // OnEndRound starts the report for the round that just ended.
+    // OnEndRound numbers the round that just ended and starts its report.
     void OnEndRound() {
-        // Captured now: the report waits for the server, and must not pick up the next map's values.
+        // Counted even if the round isn't sent, so later rounds keep their numbers.
+        mapRoundsEnded++;
+        // Captured now: the report waits for the server, and must not pick up the next round's or map's values.
+        roundTracker.number = mapRoundsEnded;
         roundTracker.mapUid = mapUid;
         roundTracker.timestamp = Time::Stamp;
+        mapLastEndRoundTime = int(MLFeed::GameTime);
 #if DEV
         DevTraceEndRound(roundTracker);
 #endif
@@ -109,6 +131,13 @@ class RaceMonitor {
     // ReportRound waits for the server's verdict on the round, then ranks it and sends it to ECM.
     void ReportRound(ref@ endedRoundReference) {
         RoundTracker@ endedRound = cast<RoundTracker>(endedRoundReference);
+        // Sending it would make ECM count every driver as a DNF.
+        if (endedRound.DriversLeftOut()) {
+            lastError = "Round " + endedRound.number + " was not sent to ECM: players drove in it, but none of their runs started"
+                + " at or after the round's start as the server reports it (" + endedRound.startTime + ").";
+            NotifyError(lastError + " Please send your Openplanet.log to the ECM team.");
+            return;
+        }
         bool scoreCommitSeen = WaitForScoreCommit(endedRound);
         endedRound.localFinishVerdict.Decide(scoreCommitSeen, endedRound.LocalFinishShown());
         auto rankedResults = endedRound.RankedResults();
@@ -130,10 +159,12 @@ class RaceMonitor {
 
     // WaitForScoreCommit keeps re-reading the ended round until the server's score commit, so the server's corrections to the runner's times are picked up, and reports whether the commit was seen.
     bool WaitForScoreCommit(RoundTracker@ endedRound) {
-        ScoreCommitWatch@ commitWatch = ScoreCommitWatch(MLFeed::GetRaceData_V4());
+        auto raceData = MLFeed::GetRaceData_V4();
+        ScoreCommitWatch@ commitWatch = ScoreCommitWatch(raceData);
         // The server commits before it ends the end-of-round sequence, so once the round has moved on, no commit is coming.
         // If monitoring stopped or we left the server, Update() no longer runs and currentState would never change.
-        while (raceMonitor is this && currentState == RaceState::EndRound_or_Similar) {
+        // Once MLFeed is on another map (or none), it has reset its race data, so there's nothing left to read.
+        while (raceMonitor is this && currentState == RaceState::EndRound_or_Similar && raceData.Map == endedRound.mapUid) {
             // Checked before reading: the commit resets round points.
             if (commitWatch.Committed()) return true;
             endedRound.WatchEndOfRound();
@@ -160,7 +191,7 @@ class RaceMonitor {
 
     // DrawRequestsInfo draws the round count and how the round-end requests went.
     void DrawRequestsInfo() {
-        UI::Text("Current Round: " + currentRound);
+        UI::Text("Rounds Ended On This Map: " + mapRoundsEnded);
         UI::Text("RoundEnd Messages Sent: " + roundEndMessagesSent);
         UI::Text("RoundEnd Messages Succeeded: " + roundEndMessagesSucceeded);
         UI::Text("RoundEnd Messages Failed: " + roundEndMessagesFailed);
