@@ -1,7 +1,7 @@
 // Dev-only tracing.
 // Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
 //
-// Never shipped: the release workflow leaves this file out of the package, so
+// Never shipped: the release workflow leaves src/dev/ out of the package, so
 // call anything declared here only from inside an #if DEV block.
 #if DEV
 
