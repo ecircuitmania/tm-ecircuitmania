@@ -368,9 +368,6 @@ class RaceMonitor {
         return results;
     }
 
-    // Upper bound on waiting for the server to commit the round's scores.
-    uint ScoreCommitTimeoutMs = 5000;
-
     // The plugin runner's own finish can still be provisional at EndRound: the
     // server may validate it a moment later, or reject it as a timeout. Wait for
     // the server's end-of-round score commit (round points folded into totals),
@@ -415,8 +412,9 @@ class RaceMonitor {
     }
 
     // Wait for the server's score commit, watching until then for the server to
-    // confirm the plugin runner's finish. Gives up after ScoreCommitTimeoutMs, or
-    // once the round state moves on.
+    // confirm the plugin runner's finish. Gives up if the server ends the
+    // end-of-round sequence without one (next round, podium or map change), or
+    // if this monitor stops.
     ServerVerdict WaitForServerVerdict(const MLFeed::HookRaceStatsEventsBase_V4@ rd, const MLFeed::PlayerCpInfo_V4@ localPlayer, int unfinishedRp) {
         ScoreCommitWatch@ commit = ScoreCommitWatch(rd);
         bool confirmed = false;
@@ -430,8 +428,12 @@ class RaceMonitor {
                 return confirmed ? ServerVerdict::Finished : ServerVerdict::Dnf;
             }
             if (!confirmed) confirmed = ServerConfirmedFinish(localPlayer, unfinishedRp);
-            if (Time::Now - start > ScoreCommitTimeoutMs) break;
+            // The server commits before it ends the end-of-round sequence, so
+            // once the round has moved on, no commit is coming.
             if (currState != RaceState::EndRound_or_Similar) break;
+            // Monitoring stopped or we left the server: Update() no longer runs,
+            // so currState would never change.
+            if (g_monitor !is this) break;
             yield();
         }
 #if DEV
