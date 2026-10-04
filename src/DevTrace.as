@@ -135,8 +135,6 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ p) {
     auto times = p.CpTimes;
     for (uint i = 0; i < times.Length; i++) cps.Add(times[i]);
     j["cpTimes"] = cps;
-    // Server-written scores table progression (netread Net_TMGame_ScoresTable_RaceProgression)
-    j["raceProg"] = "" + p.RaceProgression.x + "," + p.RaceProgression.y;
     // Server-synced score (what the in-game scoreboard reads)
     auto smp = p.FindCSmPlayer();
     if (smp !is null) {
@@ -200,14 +198,11 @@ void DevWatchScores(RaceMonitor@ m) {
     auto rd = MLFeed::GetRaceData_V4();
     for (uint i = 0; i < rd.SortedPlayers_Race.Length; i++) {
         auto p = cast<MLFeed::PlayerCpInfo_V4>(rd.SortedPlayers_Race[i]);
-        auto smp = p.FindCSmPlayer();
-        if (smp is null) continue;
-        auto sp = cast<CSmScriptPlayer>(smp.ScriptAPI);
-        if (sp is null || sp.Score is null) continue;
-        auto sc = sp.Score;
+        auto sc = GetServerScore(p);
+        if (sc is null) continue;
         string prev = "";
         for (uint k = 0; k < sc.PrevRaceTimes.Length; k++) prev += (k > 0 ? "," : "") + sc.PrevRaceTimes[k];
-        string v = "[" + prev + "] rp=" + sc.RoundPoints + " prog=" + p.RaceProgression.x + "," + p.RaceProgression.y;
+        string v = "[" + prev + "] rp=" + sc.RoundPoints;
         string old;
         if (devScoreSeen.Get(p.Login, old) && old == v) continue;
         devScoreSeen[p.Login] = v;
