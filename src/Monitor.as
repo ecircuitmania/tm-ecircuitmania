@@ -62,7 +62,7 @@ class RaceMonitor {
         }
         if (currentState == RaceState::Active) {
             roundTracker.WatchRace(raceData);
-            roundTracker.localFinishVerdict.WatchRace(roundTracker);
+            roundTracker.serverVerdictOnOwnFinish.WatchRace(roundTracker);
         }
         feedHealth.Update();
 #if DEV
@@ -139,7 +139,7 @@ class RaceMonitor {
             return;
         }
         bool scoreCommitSeen = WaitForScoreCommit(endedRound);
-        endedRound.localFinishVerdict.Decide(scoreCommitSeen, endedRound.LocalFinishShown());
+        endedRound.ApplyServerVerdictOnOwnFinish(scoreCommitSeen);
         auto rankedResults = endedRound.RankedResults();
         auto payload = MakeRoundEndPayload(rankedResults, endedRound.number, endedRound.mapUid, endedRound.timestamp);
 #if DEV
@@ -168,7 +168,7 @@ class RaceMonitor {
             // Checked before reading: the commit resets round points.
             if (commitWatch.Committed()) return true;
             endedRound.WatchEndOfRound();
-            endedRound.localFinishVerdict.WatchEndOfRound(endedRound);
+            endedRound.serverVerdictOnOwnFinish.WatchEndOfRound(endedRound);
             yield();
         }
         return false;

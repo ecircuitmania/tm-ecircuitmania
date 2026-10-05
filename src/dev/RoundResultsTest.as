@@ -14,19 +14,21 @@ RoundResult@ TestRoundResult(const string &in webServicesUserId, int finishTime,
     return RoundResult(webServicesUserId, webServicesUserId, finishTime, cpTimes, points);
 }
 
-// TestRejected returns the verdict on a finish, from the evidence gathered by the end of the wait.
-bool TestRejected(bool scoreCommitSeen, bool finishShown, bool haveSample, bool signalSeen, bool serverConfirmed) {
-    LocalFinishVerdict verdict;
+// TestVerdict returns the server's verdict on a finish, from the evidence gathered by the end of the wait, with the reason when there's none.
+string TestVerdict(bool scoreCommitSeen, bool haveSample, bool signalSeen, bool serverConfirmed) {
+    ServerVerdictOnOwnFinish verdict;
     verdict.haveSample = haveSample;
     verdict.roundPointsSignal = signalSeen;
     verdict.serverConfirmed = serverConfirmed;
-    verdict.Decide(scoreCommitSeen, finishShown);
-    return verdict.rejected;
+    auto outcome = verdict.Decide(scoreCommitSeen);
+    if (outcome == ServerVerdict::Confirmed) return "confirmed";
+    if (outcome == ServerVerdict::Rejected) return "rejected";
+    return "none: " + verdict.noVerdictReason;
 }
 
 // TestConfirms reports whether a score record confirms a finish, given the sample and the signals this round showed.
 bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, bool roundPointsSignal, bool previousRaceTimesSignal, int roundPoints, const string &in previousRaceTimes) {
-    LocalFinishVerdict verdict;
+    ServerVerdictOnOwnFinish verdict;
     verdict.sampledRoundPoints = sampledRoundPoints;
     verdict.sampledPreviousRaceTimes = sampledPreviousRaceTimes;
     verdict.roundPointsSignal = roundPointsSignal;
@@ -36,7 +38,7 @@ bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTi
 
 // TestSignals returns the signals one other finisher's score record shows, as "round points", "previous race times" or "".
 string TestSignals(int sampledRoundPoints, int roundPoints, const string &in previousRaceTimesWhileRacing, const string &in previousRaceTimes) {
-    LocalFinishVerdict verdict;
+    ServerVerdictOnOwnFinish verdict;
     verdict.sampledRoundPoints = sampledRoundPoints;
     verdict.LearnFromFinisher(roundPoints, previousRaceTimesWhileRacing, previousRaceTimes);
     string signals = "";
@@ -45,7 +47,7 @@ string TestSignals(int sampledRoundPoints, int roundPoints, const string &in pre
     return signals;
 }
 
-// RunRoundResultTests checks the ranking, which runs count for a round and the plugin runner's verdict, and logs any failure.
+// RunRoundResultTests checks the ranking, which runs count for a round and the server's verdict on the plugin runner's finish, and logs any failure.
 void RunRoundResultTests() {
     uint failed = 0;
 
@@ -102,23 +104,22 @@ void RunRoundResultTests() {
         SortRoundResults(results);
         if (results[0].webServicesUserId != "fin" || results[1].webServicesUserId != "dnf" || results[2].webServicesUserId != "afk") { failed++; warn("RoundResult test 6 failed: 0-checkpoint DNF ordering"); }
     }
-    // 7. A rejected finish is marked on a copy, leaving the result read from MLFeed as it was.
+    // 7. A rejected finish loses its finish crossing, so it ranks by the checkpoints reached before it.
     {
-        auto shown = TestRoundResult("local", 20450, "11448,20450", 0);
-        auto dnf = shown.Copy();
-        dnf.MarkDnf();
-        if (dnf.Finished || dnf.cpTimes.Length != 1 || !shown.Finished || shown.cpTimes.Length != 2) { failed++; warn("RoundResult test 7 failed: DNF on a copy"); }
+        auto rejected = TestRoundResult("runner", 20450, "11448,20450", 0);
+        rejected.MarkDnf();
+        if (rejected.Finished || rejected.cpTimes.Length != 1) { failed++; warn("RoundResult test 7 failed: rejected finish"); }
     }
-    // 8. The runner's finish is a DNF only when the commit was seen, a sample exists, other finishers showed a signal,
-    //    and the server never confirmed it. Without a signal the server has no say we can read, so the finish stays.
+    // 8. The server's verdict: Confirmed once it confirmed the finish; Rejected when the commit was seen, a sample exists and
+    //    other finishers showed a signal; otherwise None, with the reason the client backup will log.
     {
-        bool passed = TestRejected(true, true, true, true, false)
-            && !TestRejected(true, true, true, true, true)
-            && !TestRejected(false, true, true, true, false)
-            && !TestRejected(true, true, false, true, false)
-            && !TestRejected(true, false, true, true, false)
-            && !TestRejected(true, true, true, false, false);
-        if (!passed) { failed++; warn("RoundResult test 8 failed: local finish verdict"); }
+        bool passed = TestVerdict(true, true, true, true) == "confirmed"
+            && TestVerdict(false, true, true, true) == "confirmed"
+            && TestVerdict(true, true, true, false) == "rejected"
+            && TestVerdict(true, false, true, false).StartsWith("none: no sample")
+            && TestVerdict(true, true, false, false).StartsWith("none: no finish signal")
+            && TestVerdict(false, true, true, false).StartsWith("none: the server's score commit");
+        if (!passed) { failed++; warn("RoundResult test 8 failed: server verdict on own finish"); }
     }
     // 9. Confirmation, only through a signal this round showed: round points moved off the sample and not 0, or PrevRaceTimes changed.
     {

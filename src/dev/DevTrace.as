@@ -129,17 +129,19 @@ void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool 
     traceData["stateAfterWait"] = tostring(monitor.currentState);
     traceData["stillMonitoring"] = raceMonitor is monitor;
 
+    auto evidence = roundTracker.serverVerdictOnOwnFinish;
     auto verdict = Json::Object();
-    verdict["finishShown"] = roundTracker.LocalFinishShown();
-    verdict["haveSample"] = roundTracker.localFinishVerdict.haveSample;
-    verdict["sampledRoundPoints"] = roundTracker.localFinishVerdict.sampledRoundPoints;
-    verdict["sampledPreviousRaceTimes"] = roundTracker.localFinishVerdict.sampledPreviousRaceTimes;
-    verdict["roundPointsSignal"] = roundTracker.localFinishVerdict.roundPointsSignal;
-    verdict["previousRaceTimesSignal"] = roundTracker.localFinishVerdict.previousRaceTimesSignal;
-    verdict["serverConfirmed"] = roundTracker.localFinishVerdict.serverConfirmed;
-    verdict["rejected"] = roundTracker.localFinishVerdict.rejected;
-    if (roundTracker.localEntry !is null) verdict["local"] = DevPlayerJson(roundTracker.localEntry.player);
-    traceData["localFinish"] = verdict;
+    verdict["serverVerdict"] = tostring(roundTracker.ownFinishVerdict);
+    verdict["noVerdictReason"] = evidence.noVerdictReason;
+    verdict["clientBackupUsed"] = roundTracker.clientBackupUsed;
+    verdict["haveSample"] = evidence.haveSample;
+    verdict["sampledRoundPoints"] = evidence.sampledRoundPoints;
+    verdict["sampledPreviousRaceTimes"] = evidence.sampledPreviousRaceTimes;
+    verdict["roundPointsSignal"] = evidence.roundPointsSignal;
+    verdict["previousRaceTimesSignal"] = evidence.previousRaceTimesSignal;
+    verdict["serverConfirmed"] = evidence.serverConfirmed;
+    if (roundTracker.pluginRunnerEntry !is null) verdict["pluginRunner"] = DevPlayerJson(roundTracker.pluginRunnerEntry.player);
+    traceData["serverVerdictOnOwnFinish"] = verdict;
 
     auto roster = Json::Array();
     for (uint i = 0; i < roundTracker.entries.Length; i++) {

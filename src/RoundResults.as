@@ -24,11 +24,6 @@ class RoundResult {
     // get_LastCpTime returns the time at the last checkpoint reached, or -1 if none.
     int get_LastCpTime() const { return cpTimes.Length == 0 ? -1 : cpTimes[cpTimes.Length - 1]; }
 
-    // Copy returns an independent copy of this result.
-    RoundResult@ Copy() const {
-        return RoundResult(webServicesUserId, name, finishTime, cpTimes, points);
-    }
-
     // MarkDnf records a DNF, dropping a finish crossing so the DNF ranks by the checkpoints reached before it.
     void MarkDnf() {
         if (Finished && cpTimes.Length > 0) cpTimes.RemoveLast();
@@ -36,7 +31,7 @@ class RoundResult {
     }
 }
 
-// RoundResultFromPlayer builds a RoundResult from MLFeed's current view of a player; for the plugin runner this view is a guess until the server corrects it.
+// RoundResultFromPlayer builds a RoundResult from MLFeed's current view of a player; for the plugin runner it's the client's guess until the server corrects it.
 RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
     int[] cpTimes;
     auto feedCpTimes = player.CpTimes;

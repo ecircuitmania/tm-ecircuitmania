@@ -3,15 +3,20 @@
 // - Other players: their checkpoint and finish times only reach this client
 //   after the server has validated them, so MLFeed's view of them is the server's.
 // - The plugin runner: this client records its own checkpoints and finish at once,
-//   before the server has seen them, so MLFeed first shows a guess.
+//   before the server has seen them, so MLFeed first shows the client's guess.
 //   - Times: the game later corrects them to the server's. RoundEntry.ReadResult
 //     re-reads until the server's score commit, so the corrected time is the one sent.
 //   - The finish itself is never corrected: a finish the server rejected still
-//     shows as one. It only counts if the server's score record (CSmArenaScore)
-//     confirms it, through PrevRaceTimes or RoundPoints depending on the mode.
-//     The score commit is spotted by round points being folded into the totals, so
-//     in a mode without round points no commit is seen and the runner's finish is
-//     always kept. See LocalFinishVerdict.
+//     shows as one. So it's settled server first, client backup only when the server
+//     gives no verdict by the end of the round (ApplyServerVerdictOnOwnFinish):
+//     - Server first: ServerVerdictOnOwnFinish reads the server's verdict from score
+//       records (CSmArenaScore), through PrevRaceTimes or RoundPoints depending on
+//       the mode. Confirmed keeps MLFeed's server-corrected result; Rejected makes
+//       the runner a DNF.
+//     - Client backup (UseClientBackup): with no verdict, the client's own view is
+//       sent, and a log line says why. The score commit is spotted by round points
+//       being folded into the totals, so in a mode without round points no commit is
+//       seen and the client backup is always used.
 
 // RoundTracker follows one round from going Active until its report is sent: who drove in it, and their results.
 // A run belongs to the round if it started at or after both the round's start as the server's rules give it
@@ -31,18 +36,21 @@ class RoundTracker {
     int startTime = -1;
     // Whether MLFeed showed anyone spawned, since the previous end of round, while the round was Active.
     bool driverSeen = false;
-    string localLogin;
+    string pluginRunnerLogin;
     // Everyone seen driving this round while it was Active, with their login IDs in entryLoginIds.
     // Runs later found to be from an earlier round stay listed, and IsThisRound tells them apart.
     array<RoundEntry@> entries;
     uint[] entryLoginIds;
-    RoundEntry@ localEntry;
-    LocalFinishVerdict localFinishVerdict;
+    RoundEntry@ pluginRunnerEntry;
+    // The server's evidence on the plugin runner's current run, and the verdict applied once the round ended.
+    ServerVerdictOnOwnFinish@ serverVerdictOnOwnFinish = ServerVerdictOnOwnFinish();
+    ServerVerdict ownFinishVerdict = ServerVerdict::None;
+    bool clientBackupUsed = false;
 
     // RoundTracker starts tracking a round on a map whose previous end of round was at previousEndRoundTime.
-    RoundTracker(int previousEndRoundTime, const string &in localLogin) {
+    RoundTracker(int previousEndRoundTime, const string &in pluginRunnerLogin) {
         this.previousEndRoundTime = previousEndRoundTime;
-        this.localLogin = localLogin;
+        this.pluginRunnerLogin = pluginRunnerLogin;
     }
 
     // WatchRace adds everyone MLFeed shows driving this round and re-reads their results, every frame while the round is Active.
@@ -64,14 +72,17 @@ class RoundTracker {
                 RoundEntry@ newEntry = RoundEntry(player);
                 entries.InsertLast(newEntry);
                 entryLoginIds.InsertLast(player.LoginMwId.Value);
-                if (player.Login == localLogin) @localEntry = newEntry;
+                if (player.Login == pluginRunnerLogin) @pluginRunnerEntry = newEntry;
                 continue;
             }
             auto entry = entries[uint(index)];
             // A rejoin gets a new MLFeed object, and a round restarted without an end gets new runs.
             // A finish in this round is kept, even if the mode lets the player drive again before the end of round.
             bool newRun = entry.player !is player || entry.runStartTime != player.StartTime;
-            if (newRun && !(IsThisRound(entry) && entry.result.Finished)) entry.StartRun(player);
+            if (!newRun || (IsThisRound(entry) && entry.result.Finished)) continue;
+            entry.StartRun(player);
+            // The server's evidence belongs to one run of the plugin runner.
+            if (entry is pluginRunnerEntry) @serverVerdictOnOwnFinish = ServerVerdictOnOwnFinish();
         }
         for (uint i = 0; i < entries.Length; i++) {
             entries[i].ReadResult();
@@ -106,33 +117,36 @@ class RoundTracker {
         return true;
     }
 
-    // LocalFinishShown reports whether MLFeed shows the plugin runner finishing this round.
-    bool LocalFinishShown() {
-        return localEntry !is null && IsThisRound(localEntry) && localEntry.result.Finished;
+    // PluginRunnerFinishShown reports whether MLFeed shows the plugin runner finishing this round.
+    bool PluginRunnerFinishShown() {
+        return pluginRunnerEntry !is null && IsThisRound(pluginRunnerEntry) && pluginRunnerEntry.result.Finished;
     }
 
-    // OtherPlayerFinished reports whether MLFeed shows anyone but the plugin runner finishing this round.
-    bool OtherPlayerFinished() {
-        for (uint i = 0; i < entries.Length; i++) {
-            if (entries[i] !is localEntry && IsThisRound(entries[i]) && entries[i].result.Finished) return true;
-        }
-        return false;
+    // ApplyServerVerdictOnOwnFinish settles the plugin runner's finish once the end-of-round wait is over: server first, client backup only when the server gives no verdict.
+    void ApplyServerVerdictOnOwnFinish(bool scoreCommitSeen) {
+        // Only a finish the client shows needs the server's verdict.
+        if (!PluginRunnerFinishShown()) return;
+        ownFinishVerdict = serverVerdictOnOwnFinish.Decide(scoreCommitSeen);
+        // Confirmed: MLFeed's result stands, with the times the server corrected.
+        if (ownFinishVerdict == ServerVerdict::Rejected) pluginRunnerEntry.result.MarkDnf();
+        if (ownFinishVerdict == ServerVerdict::None) UseClientBackup(serverVerdictOnOwnFinish.noVerdictReason);
     }
 
-    // RankedResults returns this round's drivers, ranked, with the server's verdict on the plugin runner's finish applied.
+    // UseClientBackup sends the client's own view of the plugin runner's finish, logging that the server gave no verdict and why.
+    void UseClientBackup(const string &in reason) {
+        clientBackupUsed = true;
+        print("Round " + number + ": client backup used for the plugin runner's finish, as the server gave no verdict (" + reason + ").");
+    }
+
+    // RankedResults returns this round's drivers, ranked.
     array<RoundResult@>@ RankedResults() {
         array<RoundResult@> results;
         for (uint i = 0; i < entries.Length; i++) {
             auto entry = entries[i];
             if (!IsThisRound(entry)) continue;
-            RoundResult@ result = entry.result;
-            if (entry is localEntry && localFinishVerdict.rejected) {
-                @result = result.Copy();
-                result.MarkDnf();
-            }
             // Switched to spectator before finishing: left out, which ECM counts as a DNF.
-            if (entry.spectating && !result.Finished) continue;
-            results.InsertLast(result);
+            if (entry.spectating && !entry.result.Finished) continue;
+            results.InsertLast(entry.result);
         }
         SortRoundResults(results);
         return results;
