@@ -10,10 +10,9 @@ RoundResult@ TestRoundResult(const string &in webServicesUserId, int finishTime,
     return RoundResult(webServicesUserId, webServicesUserId, finishTime, cpTimes, points);
 }
 
-string TestVerdict(bool scoreCommitSeen, bool haveSample, bool signalSeen, bool serverConfirmed) {
+string TestVerdict(bool scoreCommitSeen, bool haveSample, bool serverConfirmed) {
     ServerVerdictOnOwnFinish verdict;
     verdict.haveSample = haveSample;
-    verdict.roundPointsSignal = signalSeen;
     verdict.serverConfirmed = serverConfirmed;
     auto outcome = verdict.Decide(scoreCommitSeen);
     if (outcome == ServerVerdict::Confirmed) return "confirmed";
@@ -21,23 +20,11 @@ string TestVerdict(bool scoreCommitSeen, bool haveSample, bool signalSeen, bool 
     return "none: " + verdict.noVerdictReason;
 }
 
-bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, bool roundPointsSignal, bool previousRaceTimesSignal, int roundPoints, const string &in previousRaceTimes) {
+bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, int roundPoints, const string &in previousRaceTimes) {
     ServerVerdictOnOwnFinish verdict;
     verdict.sampledRoundPoints = sampledRoundPoints;
     verdict.sampledPreviousRaceTimes = sampledPreviousRaceTimes;
-    verdict.roundPointsSignal = roundPointsSignal;
-    verdict.previousRaceTimesSignal = previousRaceTimesSignal;
     return verdict.ServerConfirms(roundPoints, previousRaceTimes);
-}
-
-string TestSignals(int sampledRoundPoints, int roundPoints, const string &in previousRaceTimesWhileRacing, const string &in previousRaceTimes) {
-    ServerVerdictOnOwnFinish verdict;
-    verdict.sampledRoundPoints = sampledRoundPoints;
-    verdict.LearnFromFinisher(roundPoints, previousRaceTimesWhileRacing, previousRaceTimes);
-    string signals = "";
-    if (verdict.roundPointsSignal) signals += "round points";
-    if (verdict.previousRaceTimesSignal) signals += "previous race times";
-    return signals;
 }
 
 void RunRoundResultTests() {
@@ -80,12 +67,12 @@ void RunRoundResultTests() {
     // 5. A finish marked DNF ranks by the CPs before it, not with the finish as an extra CP.
     {
         auto rejected = TestRoundResult("rejected", 20000, "5000,9000,20000", 0);
-        rejected.MarkDnf();
+        rejected.MaybeMarkDnf();
         array<RoundResult@> results;
         results.InsertLast(rejected);
         results.InsertLast(TestRoundResult("dnf", -1, "5000,8000", 0));
         SortRoundResults(results);
-        if (rejected.Finished || results[0].webServicesUserId != "dnf") { failed++; warn("RoundResult test 5 failed: MarkDnf"); }
+        if (rejected.Finished || results[0].webServicesUserId != "dnf") { failed++; warn("RoundResult test 5 failed: MaybeMarkDnf"); }
     }
     // 6. A DNF that never reached checkpoint 1 ranks after DNFs that did.
     {
@@ -99,70 +86,46 @@ void RunRoundResultTests() {
     // 7. A rejected finish loses its finish crossing, so it ranks by the checkpoints reached before it.
     {
         auto rejected = TestRoundResult("runner", 20450, "11448,20450", 0);
-        rejected.MarkDnf();
+        rejected.MaybeMarkDnf();
         if (rejected.Finished || rejected.cpTimes.Length != 1) { failed++; warn("RoundResult test 7 failed: rejected finish"); }
     }
     // 8. The server's verdict on the runner's finish.
     {
-        bool passed = TestVerdict(true, true, true, true) == "confirmed"
-            && TestVerdict(false, true, true, true) == "confirmed"
-            && TestVerdict(true, true, true, false) == "rejected"
-            && TestVerdict(true, false, true, false).StartsWith("none: no sample")
-            && TestVerdict(true, true, false, false).StartsWith("none: no finish signal")
-            && TestVerdict(false, true, true, false).StartsWith("none: the server's score commit");
+        bool passed = TestVerdict(true, true, true) == "confirmed"
+            && TestVerdict(false, true, true) == "confirmed"
+            && TestVerdict(true, true, false) == "rejected"
+            && TestVerdict(true, false, false).StartsWith("none: no sample")
+            && TestVerdict(false, true, false).StartsWith("none: the server's score commit");
         if (!passed) { failed++; warn("RoundResult test 8 failed: server verdict on own finish"); }
     }
-    // 9. Confirmation only through a signal this round showed.
+    // 9. What confirms the runner's finish.
     {
-        bool passed = TestConfirms(-20, "", true, false, -2, "")
-            && TestConfirms(0, "", true, false, 6, "")
-            && !TestConfirms(0, "", true, false, 0, "")
-            && !TestConfirms(-20, "", true, false, 0, "")
-            && !TestConfirms(-20, "", true, false, -20, "")
-            && !TestConfirms(-20, "", false, true, -2, "")
-            && TestConfirms(0, "", false, true, 0, "5000,9000")
-            && TestConfirms(0, "4000,8000", false, true, 0, "5000,9000")
-            && !TestConfirms(0, "4000,8000", false, true, 0, "4000,8000")
-            && !TestConfirms(0, "", true, false, 0, "5000,9000");
+        bool passed = TestConfirms(-20, "", -2, "")
+            && TestConfirms(0, "", 6, "")
+            && !TestConfirms(0, "", 0, "")
+            && !TestConfirms(-20, "", 0, "")
+            && !TestConfirms(-20, "", -20, "")
+            && TestConfirms(0, "", 0, "5000,9000")
+            && TestConfirms(0, "4000,8000", 0, "5000,9000")
+            && !TestConfirms(0, "4000,8000", 0, "4000,8000");
         if (!passed) { failed++; warn("RoundResult test 9 failed: server confirmation"); }
     }
-    // 10. Signals from another finisher.
+    // 10. Which runs count for the round.
     {
-        bool passed = TestSignals(-20, -1, "", "") == "round points"
-            && TestSignals(0, 0, "", "") == ""
-            && TestSignals(0, 0, "4000,8000", "5000,9000") == "previous race times"
-            && TestSignals(0, 0, "4000,8000", "4000,8000") == ""
-            && TestSignals(0, 0, "4000,8000", "") == "";
-        if (!passed) { failed++; warn("RoundResult test 10 failed: finish signals"); }
-    }
-    // 11. Which runs count for the round.
-    {
-        RoundTracker@ tracker = RoundTracker(30000, "");
+        RoundTracker@ tracker = RoundTracker("");
         bool passed = !tracker.StartedThisRound(60000);
-        // A mode that sets Rules_StartTime once per map: last round's runs stay out, this round's count.
         tracker.startTime = 1000;
-        passed = passed && !tracker.StartedThisRound(2000) && tracker.StartedThisRound(60000) && !tracker.StartedThisRound(uint(-1));
-        // A mode whose Rules_StartTime comes after its spawns: nothing counts.
-        tracker.startTime = 60001;
-        passed = passed && !tracker.StartedThisRound(60000) && tracker.StartedThisRound(60001);
-        if (!passed) { failed++; warn("RoundResult test 11 failed: runs counted for the round"); }
+        passed = passed && !tracker.StartedThisRound(500) && tracker.StartedThisRound(1000) && !tracker.StartedThisRound(uint(-1));
+        if (!passed) { failed++; warn("RoundResult test 10 failed: runs counted for the round"); }
     }
-    // 12. Drivers seen but none counted: the round isn't sent.
-    {
-        RoundTracker@ tracker = RoundTracker(0, "");
-        bool passed = !tracker.DriversLeftOut();
-        tracker.driverSeen = true;
-        passed = passed && tracker.DriversLeftOut();
-        if (!passed) { failed++; warn("RoundResult test 12 failed: drivers left out"); }
-    }
-    // 13. Re-reads only move a run forward, but take corrected times.
+    // 11. Re-reads only move a run forward, but take corrected times.
     {
         auto finished = TestRoundResult("p", 20000, "5000,20000", 0);
         bool passed = MovesBackwards(finished, TestRoundResult("p", -1, "5000,20000", 0))
             && MovesBackwards(finished, TestRoundResult("p", -1, "5000", 0))
             && !MovesBackwards(finished, TestRoundResult("p", 20130, "5000,20130", 0))
             && !MovesBackwards(TestRoundResult("p", -1, "5000", 0), TestRoundResult("p", -1, "5000,9000", 0));
-        if (!passed) { failed++; warn("RoundResult test 13 failed: forward-only reads"); }
+        if (!passed) { failed++; warn("RoundResult test 11 failed: forward-only reads"); }
     }
 
     if (failed == 0) print("RoundResult tests: all passed");

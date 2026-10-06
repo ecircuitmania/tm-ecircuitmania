@@ -1,18 +1,18 @@
-// Other players' results only reach this client once the server has validated them. The plugin runner's
-// own are the client's guess: the server later corrects their times, but not a finish it rejected, which
-// ServerVerdictOnOwnFinish settles from the score records.
+// Two watchers, because a match is often recorded by one of its own players, and no spectators.
+// RoundTracker reads every result from MLFeed. A client shows other players' cars only as the server
+// relays them, so their results are the server's. The plugin runner's own car is this client's own
+// simulation: the server corrects its times, but a finish that reached the server after the finish
+// timeout isn't corrected, just not counted, so it still shows here. That decision only reaches this
+// client through the runner's score record, as round points (it carries no times in the modes tested);
+// ServerVerdictOnOwnFinish reads it.
 
-// A run belongs to the round if it started at or after both the round's Rules_StartTime and the map's
-// previous end of round, whatever the mode does with Rules_StartTime.
 class RoundTracker {
     // Set at EndRound.
     int number = 0;
     string mapUid;
     int64 timestamp = 0;
-    int previousEndRoundTime;
     // -1 until read. A later one means the round restarted without an end.
     int startTime = -1;
-    bool driverSeen = false;
     string pluginRunnerLogin;
     // Can hold runs from earlier rounds; IsThisRound tells them apart.
     array<RoundEntry@> entries;
@@ -22,8 +22,7 @@ class RoundTracker {
     ServerVerdict ownFinishVerdict = ServerVerdict::None;
     bool clientBackupUsed = false;
 
-    RoundTracker(int previousEndRoundTime, const string &in pluginRunnerLogin) {
-        this.previousEndRoundTime = previousEndRoundTime;
+    RoundTracker(const string &in pluginRunnerLogin) {
         this.pluginRunnerLogin = pluginRunnerLogin;
     }
 
@@ -36,7 +35,6 @@ class RoundTracker {
         }
         for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
             auto player = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
-            if (player.IsSpawned && int(player.StartTime) >= previousEndRoundTime) driverSeen = true;
             // Only positive evidence of driving counts, so spectators stay out.
             bool driving = player.IsSpawned || player.CpCount > 0;
             if (!driving || !StartedThisRound(player.StartTime)) continue;
@@ -70,19 +68,11 @@ class RoundTracker {
     bool StartedThisRound(uint runStartTime) {
         // MLFeed stores the game's signed start times as uint, so an unset -1 becomes the largest uint: compare as int.
         int runStart = int(runStartTime);
-        return startTime >= 0 && runStart >= startTime && runStart >= previousEndRoundTime;
+        return startTime >= 0 && runStart >= startTime;
     }
 
     bool IsThisRound(RoundEntry@ entry) {
         return StartedThisRound(entry.runStartTime);
-    }
-
-    bool DriversLeftOut() {
-        if (!driverSeen) return false;
-        for (uint i = 0; i < entries.Length; i++) {
-            if (IsThisRound(entries[i])) return false;
-        }
-        return true;
     }
 
     bool PluginRunnerFinishShown() {
@@ -92,7 +82,7 @@ class RoundTracker {
     void ApplyServerVerdictOnOwnFinish(bool scoreCommitSeen) {
         if (!PluginRunnerFinishShown()) return;
         ownFinishVerdict = serverVerdictOnOwnFinish.Decide(scoreCommitSeen);
-        if (ownFinishVerdict == ServerVerdict::Rejected) pluginRunnerEntry.result.MarkDnf();
+        if (ownFinishVerdict == ServerVerdict::Rejected) pluginRunnerEntry.result.MaybeMarkDnf();
         if (ownFinishVerdict == ServerVerdict::None) UseClientBackup(serverVerdictOnOwnFinish.noVerdictReason);
     }
 

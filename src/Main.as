@@ -12,6 +12,7 @@ UI::Texture@ logo;
 
 void Main() {
 #if DEV
+    // This only runs in developer mode, for sanity checking changes. Does not block CI or release.
     RunRoundResultTests();
 #endif
     yield();

@@ -11,12 +11,9 @@ enum RaceState {
 
 // Kept outside the monitor, so restarting monitoring doesn't renumber the map's rounds.
 int mapRoundsEnded = 0;
-// MLFeed::GameTime at the map's last end of round, 0 before the first.
-int mapLastEndRoundTime = 0;
 
 void ResetMapRounds() {
     mapRoundsEnded = 0;
-    mapLastEndRoundTime = 0;
 }
 
 class RaceMonitor {
@@ -94,7 +91,7 @@ class RaceMonitor {
     void OnGoingActive() {
         // Racing that stops without an end of round, such as a brief blip, doesn't end the round.
         if (roundTracker !is null) return;
-        @roundTracker = RoundTracker(mapLastEndRoundTime, GetLocalLogin());
+        @roundTracker = RoundTracker(GetLocalLogin());
     }
 
     void OnEndRound() {
@@ -103,7 +100,6 @@ class RaceMonitor {
         roundTracker.number = mapRoundsEnded;
         roundTracker.mapUid = mapUid;
         roundTracker.timestamp = Time::Stamp;
-        mapLastEndRoundTime = int(MLFeed::GameTime);
 #if DEV
         DevTraceEndRound(roundTracker);
 #endif
@@ -113,13 +109,6 @@ class RaceMonitor {
 
     void ReportRound(ref@ endedRoundReference) {
         RoundTracker@ endedRound = cast<RoundTracker>(endedRoundReference);
-        // Sending it would make ECM count every driver as a DNF.
-        if (endedRound.DriversLeftOut()) {
-            lastError = "Round " + endedRound.number + " was not sent to ECM: players drove in it, but none of their runs started"
-                + " at or after the round's start as the server reports it (" + endedRound.startTime + ").";
-            NotifyError(lastError + " Please send your Openplanet.log to the ECM team.");
-            return;
-        }
         bool scoreCommitSeen = WaitForScoreCommit(endedRound);
         endedRound.ApplyServerVerdictOnOwnFinish(scoreCommitSeen);
         auto rankedResults = endedRound.RankedResults();

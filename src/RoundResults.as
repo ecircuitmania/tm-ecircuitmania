@@ -20,7 +20,7 @@ class RoundResult {
     int get_LastCpTime() const { return cpTimes.Length == 0 ? -1 : cpTimes[cpTimes.Length - 1]; }
 
     // Drops the finish crossing, so the DNF ranks by the checkpoints before it.
-    void MarkDnf() {
+    void MaybeMarkDnf() {
         if (Finished && cpTimes.Length > 0) cpTimes.RemoveLast();
         finishTime = -1;
     }

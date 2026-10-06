@@ -38,7 +38,6 @@ void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::HookRaceStatsE
     auto traceData = Json::Object();
     traceData["roundsEnded"] = mapRoundsEnded;
     traceData["rulesStartTime"] = roundTracker.startTime;
-    traceData["previousEndRoundTime"] = roundTracker.previousEndRoundTime;
     auto players = Json::Array();
     for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
         players.Add(DevRunJson(cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i])));
@@ -51,9 +50,6 @@ void DevTraceEndRound(RoundTracker@ roundTracker) {
     auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
     traceData["rulesStartTime"] = roundTracker.startTime;
-    traceData["previousEndRoundTime"] = roundTracker.previousEndRoundTime;
-    traceData["driverSeen"] = roundTracker.driverSeen;
-    traceData["driversLeftOut"] = roundTracker.DriversLeftOut();
     auto roster = Json::Array();
     for (uint i = 0; i < roundTracker.entries.Length; i++) {
         auto entry = roundTracker.entries[i];
@@ -122,8 +118,6 @@ void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool 
     verdict["haveSample"] = evidence.haveSample;
     verdict["sampledRoundPoints"] = evidence.sampledRoundPoints;
     verdict["sampledPreviousRaceTimes"] = evidence.sampledPreviousRaceTimes;
-    verdict["roundPointsSignal"] = evidence.roundPointsSignal;
-    verdict["previousRaceTimesSignal"] = evidence.previousRaceTimesSignal;
     verdict["serverConfirmed"] = evidence.serverConfirmed;
     if (roundTracker.pluginRunnerEntry !is null) verdict["pluginRunner"] = DevPlayerJson(roundTracker.pluginRunnerEntry.player);
     traceData["serverVerdictOnOwnFinish"] = verdict;
