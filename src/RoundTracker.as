@@ -59,10 +59,12 @@ class RoundTracker {
             // Only read while the round is Active, so the report sees who was spectating at EndRound.
             if (entries[i].RunIsCurrent) entries[i].spectating = entries[i].player.RequestsSpectate;
         }
+        serverVerdictOnOwnFinish.SampleBaseline(this);
     }
 
     void WatchEndOfRound() {
         for (uint i = 0; i < entries.Length; i++) entries[i].ReadResult();
+        serverVerdictOnOwnFinish.WatchForConfirmation(this);
     }
 
     bool StartedThisRound(uint runStartTime) {

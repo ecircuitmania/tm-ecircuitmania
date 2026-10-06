@@ -22,7 +22,7 @@ class ServerVerdictOnOwnFinish {
     bool serverConfirmed = false;
     string noVerdictReason;
 
-    void WatchRace(RoundTracker@ round) {
+    void SampleBaseline(RoundTracker@ round) {
         NoteFirstOtherFinish(round);
         auto runner = round.pluginRunnerEntry;
         if (runner is null || !round.IsThisRound(runner) || haveSample || runner.result.Finished) return;
@@ -34,7 +34,7 @@ class ServerVerdictOnOwnFinish {
         haveSample = true;
     }
 
-    void WatchEndOfRound(RoundTracker@ round) {
+    void WatchForConfirmation(RoundTracker@ round) {
         // A sample means the runner is in this round.
         if (!haveSample || serverConfirmed) return;
         auto score = GetServerScore(round.pluginRunnerEntry.player);
@@ -51,7 +51,7 @@ class ServerVerdictOnOwnFinish {
         }
     }
 
-    bool ServerConfirms(int roundPoints, const string &in previousRaceTimes) {
+    bool ServerConfirms(int roundPoints, const string&in previousRaceTimes) {
         // Round points of 0 are the commit resetting them, not a confirmation; PrevRaceTimes can still hold an earlier round's times.
         return (roundPoints != sampledRoundPoints && roundPoints != 0)
             || (previousRaceTimes.Length > 0 && previousRaceTimes != sampledPreviousRaceTimes);
@@ -59,9 +59,7 @@ class ServerVerdictOnOwnFinish {
 
     ServerVerdict Decide(bool scoreCommitSeen) {
         if (serverConfirmed) return ServerVerdict::Confirmed;
-        if (!haveSample) noVerdictReason = "no sample: the plugin runner finished first, alone, or within 500 ms of the first other finish";
-        else if (!scoreCommitSeen) noVerdictReason = "the server's score commit wasn't seen";
-        else return ServerVerdict::Rejected;
+        if (!haveSample) noVerdictReason = "no sample: the plugin runner finished first, alone, or within 500 ms of the first other finish"; else if (!scoreCommitSeen) noVerdictReason = "the server's score commit wasn't seen"; else return ServerVerdict::Rejected;
         return ServerVerdict::None;
     }
 }

@@ -50,7 +50,6 @@ class RaceMonitor {
         }
         if (currentState == RaceState::Active) {
             roundTracker.WatchRace(raceData);
-            roundTracker.serverVerdictOnOwnFinish.WatchRace(roundTracker);
         }
 #if DEV
         DevWatchScores(this);
@@ -138,7 +137,6 @@ class RaceMonitor {
             // Checked before reading: the commit resets round points.
             if (commitWatch.Committed()) return true;
             endedRound.WatchEndOfRound();
-            endedRound.serverVerdictOnOwnFinish.WatchEndOfRound(endedRound);
             yield();
         }
         return false;
