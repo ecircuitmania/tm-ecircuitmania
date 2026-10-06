@@ -30,7 +30,6 @@ class RaceMonitor {
     RaceState currentState = RaceState::NoMap;
     // The round in progress, from going Active until its end of round.
     RoundTracker@ roundTracker;
-    FeedHealthCheck feedHealth;
 
     uint roundEndMessagesSent = 0;
     uint roundEndMessagesSucceeded = 0;
@@ -64,7 +63,6 @@ class RaceMonitor {
             roundTracker.WatchRace(raceData);
             roundTracker.serverVerdictOnOwnFinish.WatchRace(roundTracker);
         }
-        feedHealth.Update();
 #if DEV
         DevWatchScores(this);
 #endif

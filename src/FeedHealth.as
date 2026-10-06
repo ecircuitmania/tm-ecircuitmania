@@ -1,95 +1,125 @@
-// FeedHealthCheck warns when MLFeed stops receiving race data. MLHook drops a plugin's feed if
-// handling one event takes more than 1 ms, and stops routing events entirely in its "panic mode";
-// either way MLFeed goes quiet and the rounds we send are incomplete.
+// FeedHealthCheck warns when MLFeed stops receiving race data. MLFeed hears about the race through
+// MLHook, which routes events from MLFeed's ManiaLink page to MLFeed's hook. That chain can break while
+// both plugins still look fine: MLHook drops a hook whose event handling takes more than 1 ms, and stops
+// routing in its "panic mode"; turning MLHook off and on removes MLFeed's page; turning MLFeed off and on
+// leaves its hook unregistered. Either way MLFeed goes quiet and the rounds we send are incomplete.
 //
-// The check: every player the engine shows in a run that started at least StartGraceMs ago must be
-// listed by MLFeed with the same StartTime. Spectators don't start runs, so their stale StartTimes
-// still match. MLFeed only hears of a StartTime with an event about checkpoints, respawns, spawn status
-// or best times, so a run it hasn't heard of yet also mismatches; but a stalled feed receives no events
-// at all. So the feed counts as stopped once a mismatch has lasted FailAfterMs with MLFeed's
-// UpdateNonce unchanged, and the warning then stays up until monitoring is restarted.
+// The check is a round trip through that whole chain. MLFeed's UpdateNonce moves whenever MLFeed handles
+// an event, so while anyone is racing it moves all the time and nothing is sent. Once MLFeed has been
+// quiet for QuietMs, we ask its page to resend every player's state (the same request MLFeed makes when
+// it starts), which answers with events for every player, spawned or not. If MissesToStall requests in a
+// row go unanswered, the feed has stopped: a warning shows, and Start Monitoring is disabled. While
+// stalled we keep asking, and AnswersToRecover answers in a row clear the warning. One answer isn't
+// enough, as MLFeed also moves its nonce once by itself when a map loads.
+//
+// The check only runs while it matters: while monitoring, or while a key is entered to start. Otherwise
+// it sends nothing and only notes MLFeed's nonce. Start Monitoring also waits for MLFeed to have been
+// heard from recently, so a stall can't slip through by starting before a request has gone unanswered.
 class FeedHealthCheck {
-    uint CheckEveryMs = 500;
-    uint FailAfterMs = 3000;
-    // A run must have been going this long before its StartTime is compared, so MLFeed has had time to see it.
-    int StartGraceMs = 1000;
+    // How long MLFeed must go without events before we ask it for some.
+    uint QuietMs = 3000;
+    // How long MLFeed has to answer a request.
+    uint AnswerWithinMs = 2000;
+    // Unanswered requests in a row before the feed counts as stopped.
+    uint MissesToStall = 3;
+    // Answered requests in a row before a stopped feed counts as working again.
+    uint AnswersToRecover = 2;
 
     bool stalled = false;
     bool notified = false;
-    uint lastCheck = 0;
-    uint mismatchSince = 0;
-    // MLFeed's UpdateNonce when the mismatch clock last started. MLFeed also bumps it when it resets for a
-    // new map, which only restarts the clock.
-    uint mismatchNonce = 0;
+    uint lastNonce = 0;
+    // When MLFeed last handled an event since the check became active, or 0 if it hasn't.
+    uint lastActivityAt = 0;
+    // When the request now awaiting an answer was sent, or 0 if none is.
+    uint requestSentAt = 0;
+    // No request is sent before this time (a map has just loaded, or we're spacing out requests).
+    uint holdRequestsUntil = 0;
+    uint missedRequests = 0;
+    uint answersWhileStalled = 0;
 
-    // Update compares MLFeed with the engine every CheckEveryMs, and marks the feed stalled once a mismatch has lasted FailAfterMs without MLFeed receiving anything.
-    void Update() {
+    // ReadyToStart reports whether MLFeed has been heard from recently enough to start monitoring.
+    bool get_ReadyToStart() const {
+        return !stalled && lastActivityAt > 0 && Time::Now - lastActivityAt < QuietMs + AnswerWithinMs;
+    }
+
+    // OnNewMap gives the new map's ManiaLink pages time to start before we ask MLFeed anything.
+    void OnNewMap() {
+        holdRequestsUntil = Time::Now + QuietMs;
+        requestSentAt = 0;
+        missedRequests = 0;
+        answersWhileStalled = 0;
+    }
+
+    // Update runs every frame while we're in a server. When not active, it only notes MLFeed's nonce.
+    void Update(bool active) {
         MaybeNotify();
-        if (stalled || Time::Now - lastCheck < CheckEveryMs) return;
-        lastCheck = Time::Now;
         auto raceData = MLFeed::GetRaceData_V4();
-        string mismatch = FindMismatch(raceData);
-        if (mismatch.Length == 0) {
-            mismatchSince = 0;
+        if (raceData is null) return;
+        bool moved = raceData.UpdateNonce != lastNonce;
+        lastNonce = raceData.UpdateNonce;
+        if (!active) {
+            lastActivityAt = 0;
+            requestSentAt = 0;
+            missedRequests = 0;
+            answersWhileStalled = 0;
             return;
         }
-        uint nonce = FeedUpdateNonce(raceData);
-        if (mismatchSince == 0 || nonce != mismatchNonce) {
-            mismatchSince = Time::Now;
-            mismatchNonce = nonce;
+        if (stalled) {
+            WatchForRecovery(moved);
             return;
         }
-        if (Time::Now - mismatchSince < FailAfterMs) return;
-        stalled = true;
-        warn("MLFeed is not receiving race data: " + mismatch);
+        if (moved) {
+            lastActivityAt = Time::Now;
+            requestSentAt = 0;
+            missedRequests = 0;
+            return;
+        }
+        if (requestSentAt > 0) {
+            if (Time::Now - requestSentAt < AnswerWithinMs) return;
+            requestSentAt = 0;
+            missedRequests++;
+            if (missedRequests < MissesToStall) return;
+            stalled = true;
+            notified = false;
+            answersWhileStalled = 0;
+            warn("MLFeed is not receiving race data: it didn't answer " + missedRequests + " requests for player states in a row.");
+            return;
+        }
+        if (lastActivityAt > 0 && Time::Now - lastActivityAt < QuietMs) return;
+        SendRequest();
     }
 
-    // FeedUpdateNonce returns MLFeed's UpdateNonce, which moves whenever MLFeed handles an event.
-    uint FeedUpdateNonce(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
-        uint nonce = 0;
-        if (raceData !is null) nonce = raceData.UpdateNonce;
-#if DEV
-        nonce = DevSimulatedUpdateNonce(nonce);
-#endif
-        return nonce;
+    // WatchForRecovery keeps asking a stalled MLFeed for player states, and clears the stall once it answers AnswersToRecover times in a row.
+    void WatchForRecovery(bool moved) {
+        if (requestSentAt == 0) {
+            SendRequest();
+            return;
+        }
+        if (moved) {
+            requestSentAt = 0;
+            holdRequestsUntil = Time::Now + 500;
+            answersWhileStalled++;
+            if (answersWhileStalled < AnswersToRecover) return;
+            stalled = false;
+            lastActivityAt = Time::Now;
+            print("MLFeed is receiving race data again.");
+            UI::ShowNotification(Meta::ExecutingPlugin().Name, "MLFeed is receiving race data again.", vec4(.4, .7, .1, .3), 10000);
+            return;
+        }
+        if (Time::Now - requestSentAt < AnswerWithinMs) return;
+        requestSentAt = 0;
+        answersWhileStalled = 0;
+        holdRequestsUntil = Time::Now + QuietMs;
     }
 
-    // FindMismatch describes the first player whose current run MLFeed hasn't seen, or returns "" if MLFeed agrees with the engine.
-    string FindMismatch(const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
+    // SendRequest asks MLFeed's page to resend every player's state, unless requests are on hold or the playground has no players yet.
+    void SendRequest() {
+        if (Time::Now < holdRequestsUntil) return;
+        // MLFeed's page only starts once the playground has players, so there's nothing to ask before then.
         auto playground = GetApp().CurrentPlayground;
-        if (playground is null) return "";
-        if (raceData is null) return "MLFeed returned no race data";
-        int gameTime = MLFeed::GameTime;
-        for (uint i = 0; i < playground.Players.Length; i++) {
-            auto enginePlayer = cast<CSmPlayer>(playground.Players[i]);
-            if (enginePlayer is null) continue;
-            auto scriptPlayer = cast<CSmScriptPlayer>(enginePlayer.ScriptAPI);
-            if (scriptPlayer is null) continue;
-            int engineStartTime = enginePlayer.StartTime;
-            // No run yet, or one too recent for MLFeed to have reported.
-            if (engineStartTime <= 0 || gameTime - engineStartTime < StartGraceMs) continue;
-            int feedStartTime = FeedStartTime(raceData, scriptPlayer.Login);
-            if (feedStartTime == engineStartTime) continue;
-            string name = scriptPlayer.Login;
-            if (scriptPlayer.User !is null) name = scriptPlayer.User.Name;
-            if (feedStartTime < 0) return name + " is in a run, but MLFeed doesn't list them";
-            return name + " started a run at " + engineStartTime + ", MLFeed shows " + feedStartTime;
-        }
-        return "";
-    }
-
-    // FeedStartTime returns the StartTime MLFeed lists for the player, or -1 if MLFeed doesn't list them.
-    int FeedStartTime(const MLFeed::HookRaceStatsEventsBase_V4@ raceData, const string &in login) {
-        for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
-            auto feedPlayer = cast<MLFeed::PlayerCpInfo_V4>(raceData.SortedPlayers_Race[i]);
-            if (feedPlayer.Login != login) continue;
-            int startTime = feedPlayer.StartTime;
-#if DEV
-            startTime = DevSimulatedFeedStartTime(login, startTime);
-#endif
-            return startTime;
-        }
-        return -1;
+        if (playground is null || playground.Players.Length == 0) return;
+        MLHook::Queue_MessageManialinkPlayground("RaceStats", {"SendAllPlayerStates"});
+        requestSentAt = Time::Now;
     }
 
     // MaybeNotify shows the error notification once per incident, waiting until the runner's car is off track so it doesn't pop up mid-run.

@@ -39,9 +39,10 @@ after them, by checkpoints reached, then time at the last checkpoint; a player
 who never reached a checkpoint ranks last.
 
 Rounds are numbered by the plugin, counting from the start of each map. The
-count survives restarting monitoring (as the MLFeed warning asks you to), but
-rounds that end while monitoring is stopped aren't counted, and starting to
-monitor mid-map counts from that point. Warmup is never reported.
+count survives restarting monitoring, but rounds that end while monitoring is
+stopped aren't counted, and starting to monitor mid-map counts from that point.
+Reloading the plugin also restarts the count, and reloading MLFeed (as the
+MLFeed warning asks you to) reloads this plugin too. Warmup is never reported.
 
 ## How results are built
 
@@ -68,14 +69,22 @@ Every player's result comes from MLFeed, and the server has the final say.
 
 ## MLFeed warning
 
-MLHook can stop delivering events to MLFeed, for example when a plugin's event
-handling takes too long. MLFeed then stops updating and the rounds sent to ECM
-are incomplete. The plugin compares MLFeed with the game: if a player's current
-run is missing from MLFeed for 3 seconds while MLFeed receives no updates at
-all, a red warning appears in the window, and an error notification pops up
-once your car isn't on track. The warning stays until you restart monitoring.
-Reload "MLFeed: Race Data" in Openplanet's Plugin Manager (or restart the game),
-then start monitoring again; the round count carries on.
+MLFeed can stop receiving events while it and MLHook still look fine: MLHook
+drops MLFeed's hook if handling an event takes too long, and turning MLFeed or
+MLHook off and on again in Openplanet leaves MLFeed without events until it's
+reloaded. MLFeed then stops updating and the rounds sent to ECM are incomplete.
+
+While you're monitoring, or have entered a key to start, the plugin checks
+MLFeed is still hearing from the game. While anyone is racing, MLFeed gets
+events all the time. Once it has been quiet for 3 seconds, the plugin asks
+MLFeed's in-game script to resend every player's state, which comes back
+through MLHook like any other race event. Start Monitoring waits until MLFeed
+has answered. If 3 requests in a row get no answer, a red warning appears in
+the window, Start Monitoring is disabled, and an error notification pops up
+once your car isn't on track. The plugin keeps asking, and clears the warning
+once MLFeed answers again. In practice that means reloading "MLFeed: Race Data"
+in Openplanet's Plugin Manager (or restarting the game), which also reloads this
+plugin; then start monitoring again.
 
 ## Developing
 
@@ -87,7 +96,9 @@ then start monitoring again; the round count carries on.
   sending them;
 - log `[ECMTRACE]` JSON lines to `Openplanet.log` for state changes, score
   changes and each round's report;
-- have a **Simulate MLFeed stall** setting to test the warning.
+- can test the MLFeed warning for real: turn **MLFeed: Race Data** or
+  **MLHook** off (or off and on again) with Openplanet's Developer > Toggle
+  plugin. Turning it back on doesn't fix MLFeed; reload MLFeed to recover.
 
 Dev-only code lives in `src/dev/` and is left out of release packages. In
 Openplanet's developer mode, the settings also show the round-end URL so it can

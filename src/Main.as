@@ -30,6 +30,8 @@ void UpdateEarlyLoop() {
 }
 
 RaceMonitor@ raceMonitor;
+// Checks MLFeed is receiving race data, whether or not we're monitoring.
+FeedHealthCheck feedHealth;
 bool IsPlaygroundLoaded;
 uint lastMapMwId = 0;
 string mapUid;
@@ -57,7 +59,13 @@ void UpdateEarly() {
         mapUid = "";
     }
     // Done with or without a monitor, so the map's round count survives restarting monitoring.
-    if (NewMapThisFrame) ResetMapRounds();
+    if (NewMapThisFrame) {
+        ResetMapRounds();
+        feedHealth.OnNewMap();
+    }
+
+    // Checked only while it matters: while monitoring, or while a key is entered to start.
+    if (IsPlaygroundLoaded && IsInServer()) feedHealth.Update(raceMonitor !is null || matchIdApiKeyInput.Length > 0);
 
     if (raceMonitor !is null) {
         raceMonitor.Update();
@@ -130,6 +138,7 @@ string lastMatchIdApiKey;
 void DrawNoMonitor() {
     UI::Text("Not currently monitoring.");
     UI::Separator();
+    feedHealth.DrawBanner();
     // Not read: only this form of InputText with the Password flag has compiled in this repo.
     bool changed;
     matchIdApiKeyInput = UI::InputText("Paste API Key", matchIdApiKeyInput, changed, UI::InputTextFlags::Password);
@@ -145,7 +154,10 @@ void DrawNoMonitor() {
         UI::TextWrapped("\\$f80 " + Icons::ExclamationTriangle + "\\$z " + error);
     }
     UI::Separator();
-    UI::BeginDisabled(!valid || !IsInServer());
+    // A stalled MLFeed would make every round we send incomplete, so wait until it has answered.
+    bool feedChecking = valid && !feedHealth.stalled && !feedHealth.ReadyToStart;
+    if (feedChecking) UI::TextDisabled("Checking MLFeed is receiving race data...");
+    UI::BeginDisabled(!valid || !IsInServer() || !feedHealth.ReadyToStart);
     if (UI::Button("Start Monitoring")) {
         @raceMonitor = RaceMonitor(parts[0], parts[1]);
         lastMatchIdApiKey = matchIdApiKeyInput;
