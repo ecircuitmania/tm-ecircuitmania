@@ -1,15 +1,12 @@
-// RoundResult is one player's result for a round, as ranked and sent to ECM.
 class RoundResult {
     string webServicesUserId;
     string name;
-    // Final race time in ms, or -1 if the player did not finish.
+    // -1 for a DNF.
     int finishTime = -1;
-    // Checkpoint times in ms, index 0 is the first checkpoint (no leading zero).
-    // For a finish, the last entry is the finish itself.
+    // Without MLFeed's leading 0. For a finish, the last entry is the finish itself.
     int[] cpTimes;
     int points = 0;
 
-    // RoundResult creates a result from the values the ranking uses.
     RoundResult(const string &in webServicesUserId, const string &in name, int finishTime, const int[] &in cpTimes, int points) {
         this.webServicesUserId = webServicesUserId;
         this.name = name;
@@ -18,20 +15,17 @@ class RoundResult {
         this.points = points;
     }
 
-    // get_Finished reports whether the player finished.
     bool get_Finished() const { return finishTime >= 0; }
 
-    // get_LastCpTime returns the time at the last checkpoint reached, or -1 if none.
     int get_LastCpTime() const { return cpTimes.Length == 0 ? -1 : cpTimes[cpTimes.Length - 1]; }
 
-    // MarkDnf records a DNF, dropping a finish crossing so the DNF ranks by the checkpoints reached before it.
+    // Drops the finish crossing, so the DNF ranks by the checkpoints before it.
     void MarkDnf() {
         if (Finished && cpTimes.Length > 0) cpTimes.RemoveLast();
         finishTime = -1;
     }
 }
 
-// RoundResultFromPlayer builds a RoundResult from MLFeed's current view of a player; for the plugin runner it's the client's guess until the server corrects it.
 RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
     int[] cpTimes;
     auto feedCpTimes = player.CpTimes;
@@ -42,14 +36,13 @@ RoundResult@ RoundResultFromPlayer(const MLFeed::PlayerCpInfo_V4@ player) {
     return RoundResult(player.WebServicesUserId, player.Name, finishTime, cpTimes, player.Points);
 }
 
-// RoundResultLess reports whether first should be ranked ahead of second, following Nadeo's tiebreak order.
+// Nadeo's tiebreak order.
 bool RoundResultLess(const RoundResult@ first, const RoundResult@ second) {
     if (first.Finished != second.Finished) return first.Finished;
 
     if (first.Finished) {
         if (first.finishTime != second.finishTime) return first.finishTime < second.finishTime;
-        // Tiebreak on previous checkpoint times, latest checkpoint first.
-        // The last entry is the finish itself, so start one before it.
+        // Then earlier checkpoints, latest first, skipping the finish itself.
         int firstIndex = int(first.cpTimes.Length) - 2;
         int secondIndex = int(second.cpTimes.Length) - 2;
         while (firstIndex >= 0 && secondIndex >= 0) {
@@ -58,7 +51,6 @@ bool RoundResultLess(const RoundResult@ first, const RoundResult@ second) {
             secondIndex--;
         }
     } else {
-        // No finish: more checkpoints is better (none ranks last), then earlier time at the last one.
         if (first.cpTimes.Length != second.cpTimes.Length) return first.cpTimes.Length > second.cpTimes.Length;
         if (first.LastCpTime != second.LastCpTime) return first.LastCpTime < second.LastCpTime;
     }
@@ -67,7 +59,6 @@ bool RoundResultLess(const RoundResult@ first, const RoundResult@ second) {
     return first.name < second.name;
 }
 
-// SortRoundResults ranks results in place with a stable insertion sort; rounds have at most a few dozen players.
 void SortRoundResults(array<RoundResult@>@ results) {
     for (uint i = 1; i < results.Length; i++) {
         auto item = results[i];

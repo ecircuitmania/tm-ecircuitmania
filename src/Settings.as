@@ -1,4 +1,3 @@
-// IsDevMode reports whether Openplanet is in developer mode, which shows the URL override below.
 bool IsDevMode() {
     return Meta::IsDeveloperMode();
 }

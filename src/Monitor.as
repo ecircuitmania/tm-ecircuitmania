@@ -1,4 +1,3 @@
-// RaceState is the phase of the race, from MLFeed's rules times and the UI sequence.
 enum RaceState {
     NoMap,
     // Invalid game time, intro UI sequence, warmup, etc.
@@ -10,25 +9,20 @@ enum RaceState {
     Podium
 }
 
-// The current map's rounds, kept outside the monitor so that restarting monitoring (as the MLFeed warning asks)
-// doesn't renumber them and make ECM overwrite earlier rounds. Reset only on a new map; rounds that end while
-// monitoring is stopped aren't counted.
+// Kept outside the monitor, so restarting monitoring doesn't renumber the map's rounds.
 int mapRoundsEnded = 0;
-// MLFeed::GameTime at the map's last end of round seen while monitoring, 0 before the first.
+// MLFeed::GameTime at the map's last end of round, 0 before the first.
 int mapLastEndRoundTime = 0;
 
-// ResetMapRounds starts the round count again, for a new map.
 void ResetMapRounds() {
     mapRoundsEnded = 0;
     mapLastEndRoundTime = 0;
 }
 
-// RaceMonitor follows the race on the current server and sends each round's results to ECM.
 class RaceMonitor {
     string matchId;
     string apiKey;
     RaceState currentState = RaceState::NoMap;
-    // The round in progress, from going Active until its end of round.
     RoundTracker@ roundTracker;
 
     uint roundEndMessagesSent = 0;
@@ -38,13 +32,11 @@ class RaceMonitor {
     string lastSuccessMessage = "";
     string lastError = "";
 
-    // RaceMonitor starts monitoring for the given ECM match.
     RaceMonitor(const string &in matchId, const string &in apiKey) {
         this.matchId = matchId;
         this.apiKey = apiKey;
     }
 
-    // Update follows the race state, tracks the round in progress and checks MLFeed's health, every frame while monitoring.
     void Update() {
         if (NewMapThisFrame) OnNewMap();
         auto newState = CalculateState();
@@ -52,7 +44,7 @@ class RaceMonitor {
             UpdateState(currentState, newState);
         }
         auto raceData = MLFeed::GetRaceData_V4();
-        // A warmup starting means the round in progress will never end, so it's dropped.
+        // A round interrupted by a warmup never ends.
         if (raceData.WarmupActive && roundTracker !is null) {
 #if DEV
             DevTraceRoundDropped(roundTracker, "warmup started");
@@ -68,14 +60,12 @@ class RaceMonitor {
 #endif
     }
 
-    // OnNewMap drops a round that never ended on the previous map; UpdateEarly has already reset the map's round count.
     void OnNewMap() {
         @roundTracker = null;
         // Racing on the new map then starts its first round, even if the state was already Active.
         currentState = RaceState::NoMap;
     }
 
-    // CalculateState works out the race state from MLFeed's rules times and the UI sequence.
     RaceState CalculateState() {
         if (!IsPlaygroundLoaded) return RaceState::NoMap;
         auto raceData = MLFeed::GetRaceData_V4();
@@ -92,27 +82,22 @@ class RaceMonitor {
         return RaceState::NoRound_or_Warmup;
     }
 
-    // UpdateState monitors the race state and calls handlers depending on the new state.
     void UpdateState(RaceState previousState, RaceState newState) {
 #if DEV
         DevTraceState(this, previousState, newState);
 #endif
         currentState = newState;
         if (newState == RaceState::Active) OnGoingActive();
-        // Even if racing stopped before the end of round: a warmup or a new map would have dropped the round.
         if (newState == RaceState::EndRound_or_Similar && roundTracker !is null) OnEndRound();
     }
 
-    // OnGoingActive starts a new round, unless racing resumes in a round that hasn't ended.
     void OnGoingActive() {
         // Racing that stops without an end of round, such as a brief blip, doesn't end the round.
         if (roundTracker !is null) return;
         @roundTracker = RoundTracker(mapLastEndRoundTime, GetLocalLogin());
     }
 
-    // OnEndRound numbers the round that just ended and starts its report.
     void OnEndRound() {
-        // Counted even if the round isn't sent, so later rounds keep their numbers.
         mapRoundsEnded++;
         // Captured now: the report waits for the server, and must not pick up the next round's or map's values.
         roundTracker.number = mapRoundsEnded;
@@ -126,7 +111,6 @@ class RaceMonitor {
         @roundTracker = null;
     }
 
-    // ReportRound waits for the server's verdict on the round, then ranks it and sends it to ECM.
     void ReportRound(ref@ endedRoundReference) {
         RoundTracker@ endedRound = cast<RoundTracker>(endedRoundReference);
         // Sending it would make ECM count every driver as a DNF.
@@ -155,13 +139,12 @@ class RaceMonitor {
         }
     }
 
-    // WaitForScoreCommit keeps re-reading the ended round until the server's score commit, so the server's corrections to the runner's times are picked up, and reports whether the commit was seen.
+    // Re-reads the ended round until the score commit, so the server's corrections to the runner's times are picked up.
     bool WaitForScoreCommit(RoundTracker@ endedRound) {
         auto raceData = MLFeed::GetRaceData_V4();
         ScoreCommitWatch@ commitWatch = ScoreCommitWatch(raceData);
-        // The server commits before it ends the end-of-round sequence, so once the round has moved on, no commit is coming.
-        // If monitoring stopped or we left the server, Update() no longer runs and currentState would never change.
-        // Once MLFeed is on another map (or none), it has reset its race data, so there's nothing left to read.
+        // Stop once no commit can come: the round moved on, monitoring stopped (currentState no longer updates),
+        // or MLFeed reset its data for another map.
         while (raceMonitor is this && currentState == RaceState::EndRound_or_Similar && raceData.Map == endedRound.mapUid) {
             // Checked before reading: the commit resets round points.
             if (commitWatch.Committed()) return true;
@@ -172,7 +155,6 @@ class RaceMonitor {
         return false;
     }
 
-    // DrawWindowInner draws the monitor's part of the plugin window.
     void DrawWindowInner() {
         UI::AlignTextToFramePadding();
         UI::Text("Running Monitor");
@@ -187,7 +169,6 @@ class RaceMonitor {
         UI::PopStyleColor();
     }
 
-    // DrawRequestsInfo draws the round count and how the round-end requests went.
     void DrawRequestsInfo() {
         UI::Text("Rounds Ended On This Map: " + mapRoundsEnded);
         UI::Text("RoundEnd Messages Sent: " + roundEndMessagesSent);
@@ -198,7 +179,6 @@ class RaceMonitor {
         UI::Text("Last Error: " + lastError);
     }
 
-    // DrawCurrentState draws the race state, the ECM match ID and the stop button.
     void DrawCurrentState() {
         UI::AlignTextToFramePadding();
         UI::Text("Current State: " + tostring(currentState));

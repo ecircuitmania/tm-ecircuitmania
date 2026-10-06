@@ -1,11 +1,6 @@
-// Dev-only tracing.
-// Every line is printed to Openplanet.log prefixed with [ECMTRACE] as one JSON object.
-//
-// Never shipped: the release workflow leaves src/dev/ out of the package, so
-// call anything declared here only from inside an #if DEV block.
+// Dev-only: left out of release packages, so only call into it from inside #if DEV.
 #if DEV
 
-// DevTrace prints one trace event to Openplanet.log as a JSON line.
 void DevTrace(const string &in eventName, Json::Value@ data) {
     data["event"] = eventName;
     data["now"] = Time::Now;
@@ -13,7 +8,6 @@ void DevTrace(const string &in eventName, Json::Value@ data) {
     print("[ECMTRACE] " + Json::Write(data));
 }
 
-// DevNotify shows a notification and logs it.
 void DevNotify(const string &in message) {
     UI::ShowNotification(Meta::ExecutingPlugin().Name, message);
     trace("Notified: " + message);
@@ -22,7 +16,6 @@ void DevNotify(const string &in message) {
 [Setting category="Dev" name="Dry run (never send HTTP requests)"]
 bool S_DevDryRun = true;
 
-// DevDryRun reports whether a request should be skipped instead of sent to ECM, and logs it if so.
 bool DevDryRun(const string &in url, const string &in payload) {
     if (S_DevDryRun) {
         print("DRY RUN, not sent: " + url);
@@ -32,7 +25,6 @@ bool DevDryRun(const string &in url, const string &in payload) {
     return false;
 }
 
-// DevTraceState logs a race state change and shows it as a notification.
 void DevTraceState(RaceMonitor@ monitor, RaceState previousState, RaceState newState) {
     auto traceData = DevRaceJson();
     traceData["from"] = tostring(previousState);
@@ -42,7 +34,6 @@ void DevTraceState(RaceMonitor@ monitor, RaceState previousState, RaceState newS
     DevNotify(tostring(newState) + ", prior: " + tostring(previousState));
 }
 
-// DevTraceRoundStart logs the round's new Rules_StartTime next to every listed player's StartTime and spawn status.
 void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::HookRaceStatsEventsBase_V4@ raceData) {
     auto traceData = Json::Object();
     traceData["roundsEnded"] = mapRoundsEnded;
@@ -56,7 +47,6 @@ void DevTraceRoundStart(RoundTracker@ roundTracker, const MLFeed::HookRaceStatsE
     DevTrace("roundStart", traceData);
 }
 
-// DevTraceEndRound logs the round's Rules_StartTime next to each roster entry and each listed player left out of the roster, before the commit.
 void DevTraceEndRound(RoundTracker@ roundTracker) {
     auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
@@ -74,7 +64,6 @@ void DevTraceEndRound(RoundTracker@ roundTracker) {
         roster.Add(entryData);
     }
     traceData["roster"] = roster;
-    // A driver of this round listed here was left out, e.g. because their run started before Rules_StartTime.
     auto notInRoster = Json::Array();
     auto raceData = MLFeed::GetRaceData_V4();
     for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
@@ -85,7 +74,6 @@ void DevTraceEndRound(RoundTracker@ roundTracker) {
     DevTrace("endRound", traceData);
 }
 
-// DevRunJson describes a player's current run as MLFeed shows it: StartTime, spawn status, checkpoints and spectating.
 Json::Value@ DevRunJson(const MLFeed::PlayerCpInfo_V4@ player) {
     auto traceData = Json::Object();
     traceData["name"] = player.Name;
@@ -96,7 +84,6 @@ Json::Value@ DevRunJson(const MLFeed::PlayerCpInfo_V4@ player) {
     return traceData;
 }
 
-// DevTraceRoundDropped logs a round in progress that was dropped without being reported, and why.
 void DevTraceRoundDropped(RoundTracker@ roundTracker, const string &in reason) {
     auto traceData = Json::Object();
     traceData["roundsEnded"] = mapRoundsEnded;
@@ -107,7 +94,6 @@ void DevTraceRoundDropped(RoundTracker@ roundTracker, const string &in reason) {
 
 dictionary devIgnoredReadsLogged;
 
-// DevTraceIgnoredRead logs, once per run, a read of MLFeed that would have moved a result backwards.
 void DevTraceIgnoredRead(RoundEntry@ entry, RoundResult@ ignored) {
     string key = entry.player.Login + "/" + entry.runStartTime;
     if (devIgnoredReadsLogged.Exists(key)) return;
@@ -120,7 +106,6 @@ void DevTraceIgnoredRead(RoundEntry@ entry, RoundResult@ ignored) {
     DevTrace("ignoredRead", traceData);
 }
 
-// DevTraceRoundReport logs how the round's report was decided, and what was sent.
 void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool scoreCommitSeen, array<RoundResult@>@ rankedResults, Json::Value@ payload) {
     auto traceData = Json::Object();
     traceData["round"] = roundTracker.number;
@@ -173,7 +158,6 @@ void DevTraceRoundReport(RaceMonitor@ monitor, RoundTracker@ roundTracker, bool 
 
 dictionary devScoresSeen;
 
-// DevWatchScores logs every change to a player's server-synced score (PrevRaceTimes, RoundPoints) with the monitor state at that moment.
 void DevWatchScores(RaceMonitor@ monitor) {
     auto raceData = MLFeed::GetRaceData_V4();
     for (uint i = 0; i < raceData.SortedPlayers_Race.Length; i++) {
@@ -194,7 +178,6 @@ void DevWatchScores(RaceMonitor@ monitor) {
     }
 }
 
-// DevPlayerJson describes MLFeed's view of a player next to their server-synced score record.
 Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ player) {
     auto traceData = Json::Object();
     traceData["login"] = player.Login;
@@ -213,7 +196,6 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ player) {
     auto feedCpTimes = player.CpTimes;
     for (uint i = 0; i < feedCpTimes.Length; i++) cpTimes.Add(feedCpTimes[i]);
     traceData["cpTimes"] = cpTimes;
-    // The server-synced score, which the in-game scoreboard reads.
     auto score = GetServerScore(player);
     if (score is null) {
         traceData["serverScoreMissing"] = true;
@@ -228,7 +210,6 @@ Json::Value@ DevPlayerJson(const MLFeed::PlayerCpInfo_V4@ player) {
     return traceData;
 }
 
-// DevRaceJson describes MLFeed's race-wide values and the UI sequence.
 Json::Value@ DevRaceJson() {
     auto raceData = MLFeed::GetRaceData_V4();
     auto traceData = Json::Object();

@@ -1,10 +1,6 @@
-// Dev-only self-checks, run on plugin load.
-//
-// Never shipped: the release workflow leaves src/dev/ out of the package, so
-// call anything declared here only from inside an #if DEV block.
+// Dev-only self-tests, run on plugin load.
 #if DEV
 
-// TestRoundResult builds a result whose name and ID are both webServicesUserId, from comma-separated checkpoint times.
 RoundResult@ TestRoundResult(const string &in webServicesUserId, int finishTime, const string &in cpTimesCsv, int points = 0) {
     int[] cpTimes;
     if (cpTimesCsv.Length > 0) {
@@ -14,7 +10,6 @@ RoundResult@ TestRoundResult(const string &in webServicesUserId, int finishTime,
     return RoundResult(webServicesUserId, webServicesUserId, finishTime, cpTimes, points);
 }
 
-// TestVerdict returns the server's verdict on a finish, from the evidence gathered by the end of the wait, with the reason when there's none.
 string TestVerdict(bool scoreCommitSeen, bool haveSample, bool signalSeen, bool serverConfirmed) {
     ServerVerdictOnOwnFinish verdict;
     verdict.haveSample = haveSample;
@@ -26,7 +21,6 @@ string TestVerdict(bool scoreCommitSeen, bool haveSample, bool signalSeen, bool 
     return "none: " + verdict.noVerdictReason;
 }
 
-// TestConfirms reports whether a score record confirms a finish, given the sample and the signals this round showed.
 bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTimes, bool roundPointsSignal, bool previousRaceTimesSignal, int roundPoints, const string &in previousRaceTimes) {
     ServerVerdictOnOwnFinish verdict;
     verdict.sampledRoundPoints = sampledRoundPoints;
@@ -36,7 +30,6 @@ bool TestConfirms(int sampledRoundPoints, const string &in sampledPreviousRaceTi
     return verdict.ServerConfirms(roundPoints, previousRaceTimes);
 }
 
-// TestSignals returns the signals one other finisher's score record shows, as "round points", "previous race times" or "".
 string TestSignals(int sampledRoundPoints, int roundPoints, const string &in previousRaceTimesWhileRacing, const string &in previousRaceTimes) {
     ServerVerdictOnOwnFinish verdict;
     verdict.sampledRoundPoints = sampledRoundPoints;
@@ -47,7 +40,6 @@ string TestSignals(int sampledRoundPoints, int roundPoints, const string &in pre
     return signals;
 }
 
-// RunRoundResultTests checks the ranking, which runs count for a round and the server's verdict on the plugin runner's finish, and logs any failure.
 void RunRoundResultTests() {
     uint failed = 0;
 
@@ -110,8 +102,7 @@ void RunRoundResultTests() {
         rejected.MarkDnf();
         if (rejected.Finished || rejected.cpTimes.Length != 1) { failed++; warn("RoundResult test 7 failed: rejected finish"); }
     }
-    // 8. The server's verdict: Confirmed once it confirmed the finish; Rejected when the commit was seen, a sample exists and
-    //    other finishers showed a signal; otherwise None, with the reason the client backup will log.
+    // 8. The server's verdict on the runner's finish.
     {
         bool passed = TestVerdict(true, true, true, true) == "confirmed"
             && TestVerdict(false, true, true, true) == "confirmed"
@@ -121,7 +112,7 @@ void RunRoundResultTests() {
             && TestVerdict(false, true, true, false).StartsWith("none: the server's score commit");
         if (!passed) { failed++; warn("RoundResult test 8 failed: server verdict on own finish"); }
     }
-    // 9. Confirmation, only through a signal this round showed: round points moved off the sample and not 0, or PrevRaceTimes changed.
+    // 9. Confirmation only through a signal this round showed.
     {
         bool passed = TestConfirms(-20, "", true, false, -2, "")
             && TestConfirms(0, "", true, false, 6, "")
@@ -135,8 +126,7 @@ void RunRoundResultTests() {
             && !TestConfirms(0, "", true, false, 0, "5000,9000");
         if (!passed) { failed++; warn("RoundResult test 9 failed: server confirmation"); }
     }
-    // 10. Signals from another finisher: round points off the runner's sample, or PrevRaceTimes written since they were racing.
-    //     A mode that only awards points at the commit, or never writes PrevRaceTimes, shows neither.
+    // 10. Signals from another finisher.
     {
         bool passed = TestSignals(-20, -1, "", "") == "round points"
             && TestSignals(0, 0, "", "") == ""
@@ -145,8 +135,7 @@ void RunRoundResultTests() {
             && TestSignals(0, 0, "4000,8000", "") == "";
         if (!passed) { failed++; warn("RoundResult test 10 failed: finish signals"); }
     }
-    // 11. A run counts for the round only if it started at or after both Rules_StartTime and the map's previous end of round,
-    //     whatever the mode does with Rules_StartTime.
+    // 11. Which runs count for the round.
     {
         RoundTracker@ tracker = RoundTracker(30000, "");
         bool passed = !tracker.StartedThisRound(60000);
@@ -158,7 +147,7 @@ void RunRoundResultTests() {
         passed = passed && !tracker.StartedThisRound(60000) && tracker.StartedThisRound(60001);
         if (!passed) { failed++; warn("RoundResult test 11 failed: runs counted for the round"); }
     }
-    // 12. Drivers seen with no run counting for the round means the round isn't sent; nobody driving still sends an empty round.
+    // 12. Drivers seen but none counted: the round isn't sent.
     {
         RoundTracker@ tracker = RoundTracker(0, "");
         bool passed = !tracker.DriversLeftOut();
@@ -166,7 +155,7 @@ void RunRoundResultTests() {
         passed = passed && tracker.DriversLeftOut();
         if (!passed) { failed++; warn("RoundResult test 12 failed: drivers left out"); }
     }
-    // 13. Re-reads only move a run forward: fewer checkpoints or a finish no longer counted are ignored, a corrected time is taken.
+    // 13. Re-reads only move a run forward, but take corrected times.
     {
         auto finished = TestRoundResult("p", 20000, "5000,20000", 0);
         bool passed = MovesBackwards(finished, TestRoundResult("p", -1, "5000,20000", 0))

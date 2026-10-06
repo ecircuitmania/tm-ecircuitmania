@@ -10,10 +10,8 @@ const string MenuTitle = MenuIconColor + PluginIcon + "\\$z " + PluginName;
 
 UI::Texture@ logo;
 
-// Main loads the logo and starts the per-frame update loop.
 void Main() {
 #if DEV
-    // This only runs in developer mode, for sanity checking changes. Does not block CI or release.
     RunRoundResultTests();
 #endif
     yield();
@@ -21,7 +19,6 @@ void Main() {
     Meta::StartWithRunContext(Meta::RunContext::AfterScripts, UpdateEarlyLoop);
 }
 
-// UpdateEarlyLoop runs UpdateEarly once per frame, after the game's scripts.
 void UpdateEarlyLoop() {
     while (true) {
         UpdateEarly();
@@ -30,14 +27,12 @@ void UpdateEarlyLoop() {
 }
 
 RaceMonitor@ raceMonitor;
-// Checks MLFeed is receiving race data, whether or not we're monitoring.
 FeedHealthCheck feedHealth;
 bool IsPlaygroundLoaded;
 uint lastMapMwId = 0;
 string mapUid;
 bool NewMapThisFrame = false;
 
-// UpdateEarly tracks the loaded map and updates the monitor, stopping it when we leave the server.
 void UpdateEarly() {
     auto game = GetApp();
     if (raceMonitor !is null && !IsInServer()) {
@@ -58,13 +53,11 @@ void UpdateEarly() {
         lastMapMwId = 0;
         mapUid = "";
     }
-    // Done with or without a monitor, so the map's round count survives restarting monitoring.
     if (NewMapThisFrame) {
         ResetMapRounds();
         feedHealth.OnNewMap();
     }
 
-    // Checked only while it matters: while monitoring, or while a key is entered to start.
     if (IsPlaygroundLoaded && IsInServer()) feedHealth.Update(raceMonitor !is null || matchIdApiKeyInput.Length > 0);
 
     if (raceMonitor !is null) {
@@ -72,14 +65,12 @@ void UpdateEarly() {
     }
 }
 
-// RenderMenu adds the plugin's window toggle to the Openplanet menu.
 void RenderMenu() {
     if (UI::MenuItem(MenuTitle, "", g_Window)) {
         g_Window = !g_Window;
     }
 }
 
-// RenderInterface draws the plugin window while it is open.
 void RenderInterface() {
     if (!g_Window) return;
     UI::SetNextWindowSize(400, 300, UI::Cond::FirstUseEver);
@@ -98,7 +89,6 @@ void RenderInterface() {
     UI::End();
 }
 
-// DrawLogo draws the ECM logo centered at the top of the window.
 void DrawLogo() {
     if (logo is null) {
         UI::Dummy(vec2(0, 60));
@@ -114,7 +104,6 @@ void DrawLogo() {
     }
 }
 
-// DrawNoMap tells the user no map is loaded, and offers to stop monitoring.
 void DrawNoMap() {
     UI::AlignTextToFramePadding();
     UI::Text("No map loaded.");
@@ -123,7 +112,6 @@ void DrawNoMap() {
     }
 }
 
-// DrawStopMonitoringButton draws a button that stops monitoring.
 void DrawStopMonitoringButton() {
     UI::Separator();
     if (UI::Button("Stop Monitoring")) {
@@ -134,12 +122,11 @@ void DrawStopMonitoringButton() {
 string matchIdApiKeyInput;
 string lastMatchIdApiKey;
 
-// DrawNoMonitor draws the "<matchId>_<apiKey>" input and the button that starts monitoring.
 void DrawNoMonitor() {
     UI::Text("Not currently monitoring.");
     UI::Separator();
     feedHealth.DrawBanner();
-    // Not read: only this form of InputText with the Password flag has compiled in this repo.
+    // Unused, but only this InputText overload compiles with the Password flag.
     bool changed;
     matchIdApiKeyInput = UI::InputText("Paste API Key", matchIdApiKeyInput, changed, UI::InputTextFlags::Password);
     if (lastMatchIdApiKey.Length > 0) {
@@ -154,7 +141,6 @@ void DrawNoMonitor() {
         UI::TextWrapped("\\$f80 " + Icons::ExclamationTriangle + "\\$z " + error);
     }
     UI::Separator();
-    // A stalled MLFeed would make every round we send incomplete, so wait until it has answered.
     bool feedChecking = valid && !feedHealth.stalled && !feedHealth.ReadyToStart;
     if (feedChecking) UI::TextDisabled("Checking MLFeed is receiving race data...");
     UI::BeginDisabled(!valid || !IsInServer() || !feedHealth.ReadyToStart);
@@ -166,13 +152,11 @@ void DrawNoMonitor() {
     UI::EndDisabled();
 }
 
-// NotifyError logs an error and shows it as a red notification.
 void NotifyError(const string &in message) {
     warn(message);
     UI::ShowNotification(Meta::ExecutingPlugin().Name + ": Error", message, vec4(.9, .3, .1, .3), 15000);
 }
 
-// IsInServer reports whether this client is connected to a server.
 bool IsInServer() {
     CTrackManiaNetwork@ network = cast<CTrackManiaNetwork>(GetApp().Network);
     CGameCtnNetServerInfo@ serverInfo = cast<CGameCtnNetServerInfo>(network.ServerInfo);

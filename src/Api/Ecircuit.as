@@ -1,4 +1,4 @@
-// MakeRoundEndPayload builds the round-end message from the ranked results; finishTime is -1 for a DNF.
+// finishTime is -1 for a DNF.
 Json::Value@ MakeRoundEndPayload(array<RoundResult@>@ rankedResults, int roundNumber, const string &in mapUid, int64 timestamp) {
     Json::Value@ payload = Json::Object();
     Json::Value@ playersArray = Json::Array();
@@ -16,7 +16,6 @@ Json::Value@ MakeRoundEndPayload(array<RoundResult@>@ rankedResults, int roundNu
     return payload;
 }
 
-// SendRoundEnd posts a round-end message to ECM and waits for the response.
 ECMResponse@ SendRoundEnd(const string &in apiKey, const string &in matchId, const string &in payload) {
     string url = Setting_PlayerRoundFullDataUrl + matchId;
 #if DEV
@@ -38,13 +37,11 @@ ECMResponse@ SendRoundEnd(const string &in apiKey, const string &in matchId, con
     return ECMResponse(status >= 200 && status < 300, status, responseBody);
 }
 
-// ECMResponse is the outcome of a request to ECM.
 class ECMResponse {
     bool success;
     int status;
     string message;
 
-    // ECMResponse records a request's outcome.
     ECMResponse(bool success, int status, const string &in message) {
         this.success = success;
         this.status = status;
